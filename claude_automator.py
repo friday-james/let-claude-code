@@ -846,23 +846,77 @@ class AutoReviewer:
             return False, f"Failed to run {cmd[0]}: {e}"
 
     def run_claude(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
-        """Run Claude CLI with the given prompt, streaming output in real-time."""
+        """Run Claude CLI with the given prompt, streaming output in real-time with usage stats."""
+        import tempfile
+        import json
+
         try:
             # Write prompt to a temp file to avoid command line length limits
-            import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
                 f.write(prompt)
                 prompt_file = f.name
 
             try:
-                # Run claude with prompt from file, output goes directly to terminal
-                result = subprocess.run(
-                    f'claude --print "$(cat \'{prompt_file}\')"',
+                # Run claude with stream-json to get usage info
+                process = subprocess.Popen(
+                    f'claude --print --output-format stream-json "$(cat \'{prompt_file}\')"',
                     cwd=self.project_dir,
                     shell=True,
-                    timeout=timeout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
                 )
-                success = result.returncode == 0
+
+                usage_info = {}
+                start_time = time.time()
+
+                while True:
+                    if time.time() - start_time > timeout:
+                        process.kill()
+                        return False, "Claude timed out"
+
+                    line = process.stdout.readline()
+                    if not line:
+                        if process.poll() is not None:
+                            break
+                        continue
+
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    try:
+                        data = json.loads(line)
+                        msg_type = data.get("type", "")
+
+                        # Print assistant messages in real-time
+                        if msg_type == "assistant" and "message" in data:
+                            content = data["message"].get("content", [])
+                            for block in content:
+                                if block.get("type") == "text":
+                                    print(block.get("text", ""), end="", flush=True)
+
+                        # Capture usage info
+                        if msg_type == "result" and "usage" in data:
+                            usage_info = data["usage"]
+
+                    except json.JSONDecodeError:
+                        # Not JSON, print as-is
+                        print(line, flush=True)
+
+                success = process.returncode == 0
+
+                # Print usage summary
+                if usage_info:
+                    input_tokens = usage_info.get("input_tokens", 0)
+                    output_tokens = usage_info.get("output_tokens", 0)
+                    total_tokens = input_tokens + output_tokens
+                    # Rough cost estimate (Claude 3.5 Sonnet pricing)
+                    cost = (input_tokens * 0.003 + output_tokens * 0.015) / 1000
+                    print(f"\n\n{'─'*50}")
+                    print(f"📊 Usage: {total_tokens:,} tokens (in: {input_tokens:,}, out: {output_tokens:,})")
+                    print(f"💰 Est. cost: ${cost:.4f}")
+                    print(f"{'─'*50}\n")
 
                 # Get summary from git log
                 if success:
