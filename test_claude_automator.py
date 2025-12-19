@@ -492,15 +492,34 @@ class TestAutoReviewer(unittest.TestCase):
         self.assertFalse(success)
         self.assertIn("not found", output)
 
-    @patch('subprocess.run')
-    def test_run_claude_command_not_found(self, mock_run):
+    @patch('subprocess.Popen')
+    def test_run_claude_command_not_found(self, mock_popen):
         """Should return helpful error when Claude CLI not found."""
-        mock_run.side_effect = FileNotFoundError()
+        mock_popen.side_effect = FileNotFoundError()
 
         success, output = self.reviewer.run_claude("test prompt")
 
         self.assertFalse(success)
         self.assertIn("Claude CLI not found", output)
+
+    @patch('time.time')
+    @patch('subprocess.Popen')
+    def test_run_claude_timeout(self, mock_popen, mock_time):
+        """Should handle Claude timeout gracefully."""
+        # Simulate time passing beyond timeout
+        mock_time.side_effect = [0, 0, 10]  # start_time, first check, timeout check
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.return_value = ""
+        mock_process.poll.return_value = None
+        mock_process.kill = MagicMock()
+        mock_popen.return_value = mock_process
+
+        success, output = self.reviewer.run_claude("test prompt", timeout=5)
+
+        self.assertFalse(success)
+        self.assertIn("timed out", output)
+        mock_process.kill.assert_called_once()
 
     @patch.object(AutoReviewer, 'run_cmd')
     def test_has_commits_ahead_true(self, mock_run_cmd):

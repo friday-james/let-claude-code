@@ -929,8 +929,6 @@ class AutoReviewer:
             finally:
                 os.unlink(prompt_file)
 
-        except subprocess.TimeoutExpired:
-            return False, "Claude timed out"
         except FileNotFoundError:
             return False, "Claude CLI not found"
         except OSError as e:
