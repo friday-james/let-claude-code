@@ -857,9 +857,9 @@ class AutoReviewer:
                 prompt_file = f.name
 
             try:
-                # Run claude with stream-json to get usage info
+                # Run claude with stream-json + verbose for real-time output and usage
                 process = subprocess.Popen(
-                    f'claude --print --output-format stream-json "$(cat \'{prompt_file}\')"',
+                    f'claude --print --output-format stream-json --verbose "$(cat \'{prompt_file}\')"',
                     cwd=self.project_dir,
                     shell=True,
                     stdout=subprocess.PIPE,
@@ -867,7 +867,7 @@ class AutoReviewer:
                     text=True,
                 )
 
-                usage_info = {}
+                result_data = {}
                 start_time = time.time()
 
                 while True:
@@ -896,9 +896,9 @@ class AutoReviewer:
                                 if block.get("type") == "text":
                                     print(block.get("text", ""), end="", flush=True)
 
-                        # Capture usage info
-                        if msg_type == "result" and "usage" in data:
-                            usage_info = data["usage"]
+                        # Capture final result with usage
+                        if msg_type == "result":
+                            result_data = data
 
                     except json.JSONDecodeError:
                         # Not JSON, print as-is
@@ -906,17 +906,23 @@ class AutoReviewer:
 
                 success = process.returncode == 0
 
-                # Print usage summary
-                if usage_info:
-                    input_tokens = usage_info.get("input_tokens", 0)
-                    output_tokens = usage_info.get("output_tokens", 0)
-                    total_tokens = input_tokens + output_tokens
-                    # Rough cost estimate (Claude 3.5 Sonnet pricing)
-                    cost = (input_tokens * 0.003 + output_tokens * 0.015) / 1000
-                    print(f"\n\n{'─'*50}")
-                    print(f"📊 Usage: {total_tokens:,} tokens (in: {input_tokens:,}, out: {output_tokens:,})")
-                    print(f"💰 Est. cost: ${cost:.4f}")
-                    print(f"{'─'*50}\n")
+                # Print usage summary from result
+                if result_data:
+                    total_cost = result_data.get("total_cost_usd", 0)
+                    usage = result_data.get("usage", {})
+                    input_tokens = usage.get("input_tokens", 0)
+                    output_tokens = usage.get("output_tokens", 0)
+                    cache_read = usage.get("cache_read_input_tokens", 0)
+                    cache_create = usage.get("cache_creation_input_tokens", 0)
+                    duration = result_data.get("duration_ms", 0) / 1000
+
+                    print(f"\n\n{'─'*60}")
+                    print(f"📊 Tokens: {input_tokens + output_tokens:,} (in: {input_tokens:,}, out: {output_tokens:,})")
+                    if cache_read or cache_create:
+                        print(f"💾 Cache: read {cache_read:,}, created {cache_create:,}")
+                    print(f"💰 Cost: ${total_cost:.4f}")
+                    print(f"⏱️  Time: {duration:.1f}s")
+                    print(f"{'─'*60}\n")
 
                 # Get summary from git log
                 if success:
