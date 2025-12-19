@@ -878,7 +878,7 @@ def main():
         success, msg = create_default_northstar(Path(args.project_dir).resolve())
         print(msg)
         if success:
-            print("\nNext: Edit NORTHSTAR.md, then run with --northstar")
+            print("\nNext: Edit NORTHSTAR.md, then run the automator (it will auto-detect)")
         sys.exit(0 if success else 1)
 
     project_path = Path(args.project_dir).resolve()
@@ -916,9 +916,22 @@ def main():
                 print(get_mode_list())
                 sys.exit(1)
     else:
-        selected_modes = select_modes_interactive()
-        if not selected_modes:
-            sys.exit(0)
+        # Auto-detect NORTHSTAR.md if it exists
+        northstar_path = project_path / "NORTHSTAR.md"
+        if northstar_path.exists():
+            prompt, error = load_northstar_prompt(project_path)
+            if not error:
+                print(f"Found NORTHSTAR.md, using North Star mode")
+                review_prompt = prompt
+                selected_modes = ["northstar"]
+            else:
+                selected_modes = select_modes_interactive()
+                if not selected_modes:
+                    sys.exit(0)
+        else:
+            selected_modes = select_modes_interactive()
+            if not selected_modes:
+                sys.exit(0)
 
     print("\n" + "=" * 60)
     print("Claude Automator")

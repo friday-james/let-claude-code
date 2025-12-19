@@ -83,8 +83,9 @@ Instead of predefined modes, define your own vision. Create a `NORTHSTAR.md` fil
 # Generate the template
 ./claude_automator.py --init-northstar
 
-# Edit NORTHSTAR.md with your goals, then:
-./claude_automator.py --once --northstar
+# Edit NORTHSTAR.md with your goals, then just run:
+./claude_automator.py --once
+# (It auto-detects NORTHSTAR.md)
 ```
 
 ### Example NORTHSTAR.md

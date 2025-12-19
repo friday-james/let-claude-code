@@ -34,3 +34,6 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# This NORTHSTAR
+NORTHSTAR.md
