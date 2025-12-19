@@ -342,6 +342,112 @@ class TestNorthstarFunctions(unittest.TestCase):
             self.assertIn("empty", error)
 
 
+class TestSelectModesInteractive(unittest.TestCase):
+    """Tests for select_modes_interactive function."""
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_quit_with_q(self, mock_print, mock_input):
+        """Should return empty list when user enters 'q'."""
+        from claude_automator import select_modes_interactive
+        mock_input.return_value = 'q'
+
+        result = select_modes_interactive()
+
+        self.assertEqual(result, [])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_quit_with_empty_string(self, mock_print, mock_input):
+        """Should return empty list when user enters empty string."""
+        from claude_automator import select_modes_interactive
+        mock_input.return_value = ''
+
+        result = select_modes_interactive()
+
+        self.assertEqual(result, [])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_all_with_zero(self, mock_print, mock_input):
+        """Should return all modes when user enters '0'."""
+        from claude_automator import select_modes_interactive, IMPROVEMENT_MODES
+        mock_input.return_value = '0'
+
+        result = select_modes_interactive()
+
+        self.assertEqual(result, list(IMPROVEMENT_MODES.keys()))
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_single_mode_by_number(self, mock_print, mock_input):
+        """Should return selected mode when user enters a number."""
+        from claude_automator import select_modes_interactive, IMPROVEMENT_MODES
+        mock_input.return_value = '1'
+
+        result = select_modes_interactive()
+
+        modes = list(IMPROVEMENT_MODES.keys())
+        self.assertEqual(result, [modes[0]])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_multiple_modes_by_number(self, mock_print, mock_input):
+        """Should return multiple modes when user enters space-separated numbers."""
+        from claude_automator import select_modes_interactive, IMPROVEMENT_MODES
+        mock_input.return_value = '1 3 5'
+
+        result = select_modes_interactive()
+
+        modes = list(IMPROVEMENT_MODES.keys())
+        self.assertEqual(result, [modes[0], modes[2], modes[4]])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_mode_by_name(self, mock_print, mock_input):
+        """Should accept mode names directly."""
+        from claude_automator import select_modes_interactive
+        mock_input.return_value = 'fix_bugs security'
+
+        result = select_modes_interactive()
+
+        self.assertEqual(result, ['fix_bugs', 'security'])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_invalid_number_ignored(self, mock_print, mock_input):
+        """Should ignore invalid numbers that are out of range."""
+        from claude_automator import select_modes_interactive, IMPROVEMENT_MODES
+        mock_input.return_value = '1 999'  # 999 is out of range
+
+        result = select_modes_interactive()
+
+        modes = list(IMPROVEMENT_MODES.keys())
+        self.assertEqual(result, [modes[0]])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_eof_error_returns_empty(self, mock_print, mock_input):
+        """Should return empty list on EOFError."""
+        from claude_automator import select_modes_interactive
+        mock_input.side_effect = EOFError()
+
+        result = select_modes_interactive()
+
+        self.assertEqual(result, [])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_keyboard_interrupt_returns_empty(self, mock_print, mock_input):
+        """Should return empty list on KeyboardInterrupt."""
+        from claude_automator import select_modes_interactive
+        mock_input.side_effect = KeyboardInterrupt()
+
+        result = select_modes_interactive()
+
+        self.assertEqual(result, [])
+
+
 class TestLockFile(unittest.TestCase):
     """Tests for LockFile class."""
 
