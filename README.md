@@ -1,48 +1,83 @@
-# Let Claude Code 🔥🥵
+# Let Claude Code
 
-### Your codebase improves itself while you sleep.
+### Set it. Forget it. Wake up to a better codebase.
 
 ```
-You: *goes to bed*
-Claude Automator: *fixes 47 bugs, adds tests, removes dead code*
-You: *wakes up to mass approved PRs*
+You: ./claude_automator.py --loop
+Claude: *improves your code while you sleep*
+Claude: *creates PR*
+Claude: *reviews its own PR*
+Claude: *fixes review feedback*
+Claude: *repeats forever*
+You: *wakes up to mass merged PRs*
 ```
 
 ---
 
-## What is this?
-
-A single Python script that lets **Claude continuously improve your codebase**.
-
-- Pick a goal (fix bugs, add tests, improve security...)
-- Claude makes changes, creates a PR
-- A *second* Claude reviews the PR
-- If changes needed, a *third* Claude fixes them
-- Loop until approved
-- You wake up to better code
-
-**Zero dependencies. Just download and run.**
-
----
-
-## Quick Start
+## One Command
 
 ```bash
-# Download it
-curl -O https://raw.githubusercontent.com/friday-james/claude-code-automator/main/claude_automator.py
+curl -O https://raw.githubusercontent.com/friday-james/let-claude-code/main/claude_automator.py
 chmod +x claude_automator.py
-
-# Let Claude improve your code
-./claude_automator.py --once -m improve_code
+./claude_automator.py --loop
 ```
 
-That's it. Go grab coffee.
+That's it. Claude improves your code forever.
 
 ---
 
-## The Modes
+## What Happens
 
-Pick what you want Claude to focus on:
+```
+┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│   YOU RUN:  ./claude_automator.py --loop                │
+│                                                          │
+│   CLAUDE 1 (Improver)                                   │
+│   └── Reads your code, makes it better, commits         │
+│                                                          │
+│   AUTO-CREATE PR                                        │
+│   └── Pushes branch, opens pull request                 │
+│                                                          │
+│   CLAUDE 2 (Reviewer)                                   │
+│   └── Reviews the PR critically                         │
+│       ├── APPROVED → Merge                              │
+│       └── CHANGES REQUESTED ↓                           │
+│                                                          │
+│   CLAUDE 3 (Fixer)                                      │
+│   └── Addresses feedback, pushes fixes                  │
+│                                                          │
+│   LOOP FOREVER                                          │
+│   └── Back to Claude 1, next improvement                │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+```
+
+Three Claudes. Arguing with each other. Making your code better. Forever.
+
+---
+
+## Pick Your Mode
+
+**Option 1: Define your vision (recommended)**
+
+Create a `NORTHSTAR.md` file describing your ideal codebase:
+
+```bash
+./claude_automator.py --init-northstar   # Creates template
+vim NORTHSTAR.md                          # Customize your goals
+./claude_automator.py --loop              # Claude iterates towards it
+```
+
+**Option 2: Use preset modes**
+
+```bash
+./claude_automator.py --loop -m fix_bugs      # Hunt and fix bugs
+./claude_automator.py --loop -m security      # Find vulnerabilities
+./claude_automator.py --loop -m add_tests     # Add missing tests
+./claude_automator.py --loop -m improve_code  # Refactor messy code
+./claude_automator.py --loop -m all           # Do everything
+```
 
 | Mode | What it does |
 |:-----|:-------------|
@@ -57,38 +92,11 @@ Pick what you want Claude to focus on:
 | `modernize` | Updates old patterns to new ones |
 | `accessibility` | Makes UI accessible to everyone |
 
-```bash
-# Run one mode
-./claude_automator.py --once -m security
-
-# Run multiple modes
-./claude_automator.py --once -m fix_bugs -m add_tests
-
-# Run ALL the modes
-./claude_automator.py --once -m all
-
-# Can't decide? Interactive picker
-./claude_automator.py --once -m interactive
-```
-
 ---
 
-## North Star Mode
+## NORTHSTAR.md
 
-**The real power move.**
-
-Instead of predefined modes, define your own vision. Create a `NORTHSTAR.md` file that describes what your perfect codebase looks like. Claude will iterate towards it, run after run.
-
-```bash
-# Generate the template
-./claude_automator.py --init-northstar
-
-# Edit NORTHSTAR.md with your goals, then just run:
-./claude_automator.py --once
-# (It auto-detects NORTHSTAR.md)
-```
-
-### Example NORTHSTAR.md
+Your vision. Claude's mission.
 
 ```markdown
 # Project North Star
@@ -102,35 +110,26 @@ A bulletproof API that developers love.
 - [ ] All user input is validated
 - [ ] No SQL injection possible
 - [ ] Auth on every protected route
-- [ ] No secrets in code
 
 ### Reliability
 - [ ] 100% of business logic has tests
 - [ ] All errors have helpful messages
-- [ ] No unhandled edge cases
 
 ### Developer Experience
 - [ ] Every public function is documented
-- [ ] Consistent code style everywhere
 - [ ] No dead code or unused imports
 ```
 
-Claude reads this, figures out what's not done yet, and makes progress. Every run gets you closer.
+Claude reads this. Figures out what's not done. Makes progress. Every. Single. Run.
 
 <details>
-<summary><b>Full default template (click to expand)</b></summary>
+<summary><b>Full default template</b></summary>
 
 ```markdown
 # Project North Star
 
-> This file defines the vision and goals for this project. The auto-improvement daemon
-> will iterate towards these goals, making incremental progress with each run.
-
 ## Vision
-
 A high-quality, well-maintained codebase that is secure, performant, and easy to work with.
-
----
 
 ## Goals
 
@@ -138,130 +137,88 @@ A high-quality, well-maintained codebase that is secure, performant, and easy to
 - [ ] Clean, readable code with consistent style
 - [ ] No code duplication (DRY principle)
 - [ ] Functions and classes have single responsibilities
-- [ ] Meaningful variable and function names
 
 ### Bug-Free
 - [ ] No runtime errors or crashes
 - [ ] All edge cases handled properly
-- [ ] No logic errors in business logic
 
 ### Security
 - [ ] No SQL injection vulnerabilities
 - [ ] No XSS vulnerabilities
-- [ ] No command injection risks
 - [ ] No hardcoded secrets or credentials
-- [ ] Proper input validation on all user inputs
+- [ ] Proper input validation
 
 ### Performance
 - [ ] No obvious performance bottlenecks
-- [ ] Efficient algorithms (no unnecessary O(n²) where O(n) works)
-- [ ] Appropriate caching where beneficial
+- [ ] Efficient algorithms
 
 ### Testing
 - [ ] Unit tests for critical business logic
-- [ ] Integration tests for key workflows
 - [ ] Edge cases covered in tests
 
 ### Documentation
-- [ ] Public APIs and functions are documented
-- [ ] Complex logic has explanatory comments
-- [ ] README is up to date
-
-### User Experience
-- [ ] Clear, helpful error messages
-- [ ] Good feedback for user actions
-- [ ] Intuitive interfaces
+- [ ] Public APIs documented
+- [ ] Complex logic has comments
 
 ### Code Health
 - [ ] No dead or unused code
-- [ ] No unused imports or variables
 - [ ] No commented-out code blocks
 
----
-
 ## Priority Order
-
-1. **Security** - Fix vulnerabilities first
-2. **Bugs** - Fix broken functionality
-3. **Tests** - Prevent regressions
-4. **Code Quality** - Improve maintainability
-5. **Performance** - Optimize where it matters
-6. **Documentation** - Help future developers
-7. **UX** - Improve the experience
-8. **Cleanup** - Remove cruft
-
----
-
-## Notes
-
-- Focus on incremental improvements
-- Don't over-engineer; keep it simple
-- Prioritize impact over perfection
-- Mark items as [x] when complete
+1. Security
+2. Bugs
+3. Tests
+4. Code Quality
+5. Performance
+6. Documentation
+7. Cleanup
 ```
 
 </details>
 
 ---
 
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                                                                 │
-│   1. YOU                                                        │
-│      └── Pick a mode (or define NORTHSTAR.md)                  │
-│                                                                 │
-│   2. IMPROVER CLAUDE                                           │
-│      └── Makes changes, commits them                           │
-│                                                                 │
-│   3. AUTO-CREATE PR                                            │
-│      └── Pushes branch, opens pull request                     │
-│                                                                 │
-│   4. REVIEWER CLAUDE                                           │
-│      ├── Reviews the PR critically                             │
-│      ├── APPROVED → Done (or auto-merge)                       │
-│      └── CHANGES REQUESTED → Go to step 5                      │
-│                                                                 │
-│   5. FIXER CLAUDE                                              │
-│      └── Addresses feedback, pushes fixes                      │
-│                                                                 │
-│   6. LOOP                                                       │
-│      └── Back to step 4 (up to 3 iterations)                   │
-│                                                                 │
-│   7. NOTIFY                                                     │
-│      └── Telegram notification with results                    │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-Three Claudes. Arguing with each other. Making your code better.
-
----
-
-## Run It Your Way
+## All The Ways
 
 ```bash
-# Once (great for testing)
-./claude_automator.py --once -m improve_code
-
-# Loop forever (starts next run immediately when one finishes)
+# The main event - loop forever
 ./claude_automator.py --loop
 
-# Every hour
-./claude_automator.py --interval 3600 -m fix_bugs
+# Run once (for testing)
+./claude_automator.py --once -m improve_code
 
-# On a cron schedule (requires: pip install croniter)
-./claude_automator.py --cron "0 */4 * * *" --northstar
+# Run every hour
+./claude_automator.py --interval 3600
+
+# Run on cron (requires: pip install croniter)
+./claude_automator.py --cron "0 */4 * * *"
 
 # Auto-merge when approved (living dangerously)
-./claude_automator.py --once --northstar --auto-merge
+./claude_automator.py --loop --auto-merge
 
 # Get Telegram notifications
-export TG_BOT_TOKEN="your_bot_token"
+export TG_BOT_TOKEN="your_token"
 export TG_CHAT_ID="your_chat_id"
 ./claude_automator.py --loop
 ```
+
+---
+
+## Usage Tracking
+
+After each run, you see:
+
+```
+────────────────────────────────────────────────────────────
+📊 Tokens: 15,234 (in: 12,500, out: 2,734)
+💾 Cache: read 14,640, created 3,461
+💰 This run: $0.0314 | Session total: $0.1542
+⏱️  Time: 6.1s
+💡 Check quota: run 'claude' then type '/usage'
+────────────────────────────────────────────────────────────
+```
+
+Sessions are continued automatically - subsequent runs reuse cached context and burn fewer tokens.
 
 ---
 
@@ -269,55 +226,50 @@ export TG_CHAT_ID="your_chat_id"
 
 | Option | What it does |
 |:-------|:-------------|
+| `--loop` | **Run forever** (start next immediately) |
 | `--once` | Run once and exit |
-| `--loop` | Run forever (next starts immediately) |
 | `--interval N` | Run every N seconds |
 | `--cron "expr"` | Run on cron schedule |
 | `-m, --mode MODE` | Improvement mode (repeatable) |
-| `-n, --northstar` | Use NORTHSTAR.md goals |
+| `-n, --northstar` | Force NORTHSTAR.md mode |
 | `--init-northstar` | Create NORTHSTAR.md template |
 | `--list-modes` | Show all available modes |
 | `--project-dir PATH` | Project directory (default: `.`) |
 | `--base-branch NAME` | Base branch for PRs (default: `main`) |
 | `--auto-merge` | Auto-merge approved PRs |
 | `--max-iterations N` | Max review-fix rounds (default: `3`) |
-| `--prompt-file PATH` | Custom prompt file |
-| `--tg-bot-token` | Telegram bot token |
-| `--tg-chat-id` | Telegram chat ID |
 
 ---
 
 ## Requirements
 
-- **Python 3.10+** (no pip install needed)
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated
-- **[GitHub CLI](https://cli.github.com/)** (`gh`) installed and authenticated
-- **Git repo** with remote configured
-
-Optional: `pip install croniter` for cron scheduling
+- **Python 3.10+** (zero dependencies)
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** installed
+- **[GitHub CLI](https://cli.github.com/)** (`gh`) installed
+- **Git repo** with remote
 
 ---
 
 ## Philosophy
 
-Your codebase should get better over time, not worse.
+Your codebase decays. Every day. Tech debt accumulates. Tests don't get written. Docs go stale.
 
-But you're busy. You have features to ship. Tech debt accumulates. Tests don't get written. Docs go stale.
+You're too busy shipping features to fix it.
 
 What if your codebase could improve itself?
 
-That's Claude Automator. Define where you want to go. Let Claude do the work. Wake up to PRs that make your code better.
+That's this. One command. Claude works while you don't. PRs appear. Code gets better.
 
-**Set it. Forget it. Ship it.**
+```bash
+./claude_automator.py --loop
+```
 
----
-
-## License
-
-MIT
+**Let Claude code.**
 
 ---
 
 <p align="center">
-  <i>Stop maintaining. Start automating.</i>
+  <b>Stop maintaining. Start automating.</b>
+  <br><br>
+  <i>Let Claude Code.</i>
 </p>
