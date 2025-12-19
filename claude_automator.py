@@ -837,18 +837,39 @@ class AutoReviewer:
             return False, str(e)
 
     def run_claude(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
-        """Run Claude CLI with the given prompt and return (success, output)."""
+        """Run Claude CLI with the given prompt, streaming output in real-time."""
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 ["claude", "--print", prompt],
                 cwd=self.project_dir,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=timeout,
+                bufsize=1,
             )
-            return result.returncode == 0, result.stdout + result.stderr
-        except subprocess.TimeoutExpired:
-            return False, "Claude timed out"
+            output_lines = []
+            start_time = time.time()
+
+            while True:
+                # Check timeout
+                if time.time() - start_time > timeout:
+                    process.kill()
+                    return False, "Claude timed out"
+
+                line = process.stdout.readline()
+                if line:
+                    print(line, end='', flush=True)
+                    output_lines.append(line)
+                elif process.poll() is not None:
+                    break
+
+            # Get any remaining output
+            remaining = process.stdout.read()
+            if remaining:
+                print(remaining, end='', flush=True)
+                output_lines.append(remaining)
+
+            return process.returncode == 0, ''.join(output_lines)
         except OSError as e:
             return False, str(e)
 
