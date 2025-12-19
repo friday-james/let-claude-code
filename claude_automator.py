@@ -508,6 +508,128 @@ IMPORTANT: Work through each section systematically. Make atomic commits for eac
 """
 
 # ============================================================================
+# INPUT VALIDATION
+# ============================================================================
+
+def validate_path(path_str: str, must_exist: bool = True, must_be_dir: bool = False) -> Path:
+    """Validate and resolve a path, preventing path traversal attacks.
+
+    Args:
+        path_str: The path string to validate
+        must_exist: If True, raise error if path doesn't exist
+        must_be_dir: If True, raise error if path is not a directory
+
+    Returns:
+        Resolved absolute Path object
+
+    Raises:
+        ValueError: If path is invalid or doesn't meet requirements
+    """
+    try:
+        path = Path(path_str).resolve()
+    except (OSError, ValueError) as e:
+        raise ValueError(f"Invalid path '{path_str}': {e}")
+
+    if must_exist and not path.exists():
+        raise ValueError(f"Path does not exist: {path}")
+
+    if must_be_dir and path.exists() and not path.is_dir():
+        raise ValueError(f"Path is not a directory: {path}")
+
+    return path
+
+
+def validate_branch_name(branch: str) -> str:
+    """Validate a git branch name for safety.
+
+    Prevents shell injection and ensures valid git ref names.
+
+    Args:
+        branch: The branch name to validate
+
+    Returns:
+        The validated branch name
+
+    Raises:
+        ValueError: If branch name is invalid or potentially dangerous
+    """
+    if not branch or not branch.strip():
+        raise ValueError("Branch name cannot be empty")
+
+    branch = branch.strip()
+
+    # Prevent shell metacharacters
+    dangerous_chars = ['$', '`', '|', ';', '&', '>', '<', '\n', '\r', '\0']
+    for char in dangerous_chars:
+        if char in branch:
+            raise ValueError(f"Branch name contains invalid character: {repr(char)}")
+
+    # Git ref name rules (simplified)
+    if branch.startswith('-') or branch.startswith('.'):
+        raise ValueError("Branch name cannot start with '-' or '.'")
+
+    if '..' in branch or branch.endswith('.lock') or branch.endswith('/'):
+        raise ValueError("Invalid git branch name format")
+
+    if len(branch) > 250:
+        raise ValueError("Branch name too long (max 250 characters)")
+
+    return branch
+
+
+def validate_cron_expression(expr: str) -> str:
+    """Validate a cron expression for basic safety.
+
+    Args:
+        expr: The cron expression to validate
+
+    Returns:
+        The validated cron expression
+
+    Raises:
+        ValueError: If expression is invalid or potentially dangerous
+    """
+    if not expr or not expr.strip():
+        raise ValueError("Cron expression cannot be empty")
+
+    expr = expr.strip()
+
+    # Prevent shell metacharacters
+    dangerous_chars = ['$', '`', '|', ';', '&', '>', '<', '\n', '\r', '\0']
+    for char in dangerous_chars:
+        if char in expr:
+            raise ValueError(f"Cron expression contains invalid character: {repr(char)}")
+
+    # Basic format check: should have 5 space-separated fields
+    parts = expr.split()
+    if len(parts) != 5:
+        raise ValueError("Cron expression must have exactly 5 fields")
+
+    return expr
+
+
+def validate_positive_int(value: int, name: str, max_value: int | None = None) -> int:
+    """Validate that a value is a positive integer.
+
+    Args:
+        value: The value to validate
+        name: The parameter name for error messages
+        max_value: Optional maximum allowed value
+
+    Returns:
+        The validated value
+
+    Raises:
+        ValueError: If value is not positive or exceeds max_value
+    """
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value}")
+    if max_value is not None and value > max_value:
+        raise ValueError(f"{name} cannot exceed {max_value}, got {value}")
+    return value
+
+
+# ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
@@ -936,14 +1058,28 @@ def main():
         print(get_mode_list())
         sys.exit(0)
 
+    # Validate inputs early to catch errors before doing any work
+    try:
+        project_path = validate_path(args.project_dir, must_exist=True, must_be_dir=True)
+        validate_branch_name(args.base_branch)
+        if args.interval:
+            validate_positive_int(args.interval, "interval", max_value=86400 * 7)  # Max 1 week
+        if args.max_iterations:
+            validate_positive_int(args.max_iterations, "max-iterations", max_value=10)
+        if args.cron:
+            validate_cron_expression(args.cron)
+        if args.prompt_file:
+            validate_path(args.prompt_file, must_exist=True)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
     if args.init_northstar:
-        success, msg = create_default_northstar(Path(args.project_dir).resolve())
+        success, msg = create_default_northstar(project_path)
         print(msg)
         if success:
             print("\nNext: Edit NORTHSTAR.md, then run the automator (it will auto-detect)")
         sys.exit(0 if success else 1)
-
-    project_path = Path(args.project_dir).resolve()
     selected_modes = []
     review_prompt = None
 
