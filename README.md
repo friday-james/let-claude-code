@@ -245,6 +245,9 @@ Three Claudes. Arguing with each other. Making your code better.
 # Once (great for testing)
 ./claude_automator.py --once -m improve_code
 
+# Loop forever (starts next run immediately when one finishes)
+./claude_automator.py --loop
+
 # Every hour
 ./claude_automator.py --interval 3600 -m fix_bugs
 
@@ -257,7 +260,7 @@ Three Claudes. Arguing with each other. Making your code better.
 # Get Telegram notifications
 export TG_BOT_TOKEN="your_bot_token"
 export TG_CHAT_ID="your_chat_id"
-./claude_automator.py --once --northstar
+./claude_automator.py --loop
 ```
 
 ---
@@ -267,6 +270,7 @@ export TG_CHAT_ID="your_chat_id"
 | Option | What it does |
 |:-------|:-------------|
 | `--once` | Run once and exit |
+| `--loop` | Run forever (next starts immediately) |
 | `--interval N` | Run every N seconds |
 | `--cron "expr"` | Run on cron schedule |
 | `-m, --mode MODE` | Improvement mode (repeatable) |

@@ -867,6 +867,18 @@ class AutoReviewer:
 # SCHEDULING
 # ============================================================================
 
+def run_loop(reviewer: AutoReviewer):
+    print("Running continuously. Press Ctrl+C to stop.")
+    run_count = 0
+    while True:
+        run_count += 1
+        print(f"\n{'='*60}")
+        print(f"Starting run #{run_count}")
+        print(f"{'='*60}\n")
+        reviewer.run_once()
+        print(f"\nRun #{run_count} complete. Starting next run immediately...")
+
+
 def run_with_interval(reviewer: AutoReviewer, interval: int):
     print(f"Running every {interval}s. Press Ctrl+C to stop.")
     while True:
@@ -874,6 +886,7 @@ def run_with_interval(reviewer: AutoReviewer, interval: int):
         reviewer.run_once()
         sleep_time = max(0, interval - (time.time() - start))
         if sleep_time > 0:
+            print(f"\nWaiting {int(sleep_time)}s before next run...")
             time.sleep(sleep_time)
 
 
@@ -901,9 +914,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=get_mode_list()
     )
+    parser.add_argument("--once", action="store_true", help="Run once and exit")
+    parser.add_argument("--loop", action="store_true", help="Run continuously (start next immediately)")
     parser.add_argument("--interval", type=int, help="Run every N seconds")
     parser.add_argument("--cron", type=str, help="Cron expression")
-    parser.add_argument("--once", action="store_true", help="Run once and exit")
     parser.add_argument("--mode", "-m", type=str, action="append", dest="modes", help="Improvement mode")
     parser.add_argument("--northstar", "-n", action="store_true", help="Use NORTHSTAR.md")
     parser.add_argument("--init-northstar", action="store_true", help="Create NORTHSTAR.md template")
@@ -1005,12 +1019,14 @@ def main():
 
     if args.once:
         sys.exit(0 if reviewer.run_once() else 1)
+    elif args.loop:
+        run_loop(reviewer)
     elif args.interval:
         run_with_interval(reviewer, args.interval)
     elif args.cron:
         run_with_cron(reviewer, args.cron)
     else:
-        print("Error: Specify --once, --interval, or --cron")
+        print("Error: Specify --once, --loop, --interval, or --cron")
         parser.print_help()
         sys.exit(1)
 
