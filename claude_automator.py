@@ -821,8 +821,13 @@ class AutoReviewer:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_line = f"[{timestamp}] {msg}"
         print(log_line)
-        with open(self.log_file, "a") as f:
-            f.write(log_line + "\n")
+        try:
+            with open(self.log_file, "a") as f:
+                f.write(log_line + "\n")
+        except PermissionError:
+            print(f"Warning: Cannot write to log file {self.log_file} (permission denied)")
+        except OSError as e:
+            print(f"Warning: Cannot write to log file {self.log_file}: {e}")
 
     def run_cmd(self, cmd: list[str], timeout: int = 60) -> tuple[bool, str]:
         """Run a shell command and return (success, output)."""
@@ -832,9 +837,13 @@ class AutoReviewer:
             )
             return result.returncode == 0, result.stdout + result.stderr
         except subprocess.TimeoutExpired:
-            return False, "Command timed out"
+            return False, f"Command timed out after {timeout}s: {' '.join(cmd)}"
+        except FileNotFoundError:
+            return False, f"Command not found: {cmd[0]}"
+        except PermissionError:
+            return False, f"Permission denied: {cmd[0]}"
         except OSError as e:
-            return False, str(e)
+            return False, f"Failed to run {cmd[0]}: {e}"
 
     def run_claude(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
         """Run Claude CLI with the given prompt, streaming output in real-time."""
@@ -870,8 +879,12 @@ class AutoReviewer:
                 output_lines.append(remaining)
 
             return process.returncode == 0, ''.join(output_lines)
+        except FileNotFoundError:
+            return False, "Claude CLI not found. Install with: npm install -g @anthropic/claude-code"
+        except PermissionError:
+            return False, "Permission denied running Claude CLI"
         except OSError as e:
-            return False, str(e)
+            return False, f"Failed to run Claude: {e}"
 
     def generate_branch_name(self) -> str:
         """Generate a unique branch name based on mode and timestamp."""
