@@ -810,6 +810,7 @@ class AutoReviewer:
         self.max_iterations = max_iterations
         self.modes = modes or ["fix_bugs"]
         self.review_prompt = review_prompt or get_combined_prompt(self.modes)
+        self.session_cost = 0.0  # Cumulative cost across all runs
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -908,7 +909,8 @@ class AutoReviewer:
 
                 # Print usage summary from result
                 if result_data:
-                    total_cost = result_data.get("total_cost_usd", 0)
+                    run_cost = result_data.get("total_cost_usd", 0)
+                    self.session_cost += run_cost
                     usage = result_data.get("usage", {})
                     input_tokens = usage.get("input_tokens", 0)
                     output_tokens = usage.get("output_tokens", 0)
@@ -920,8 +922,9 @@ class AutoReviewer:
                     print(f"📊 Tokens: {input_tokens + output_tokens:,} (in: {input_tokens:,}, out: {output_tokens:,})")
                     if cache_read or cache_create:
                         print(f"💾 Cache: read {cache_read:,}, created {cache_create:,}")
-                    print(f"💰 Cost: ${total_cost:.4f}")
+                    print(f"💰 This run: ${run_cost:.4f} | Session total: ${self.session_cost:.4f}")
                     print(f"⏱️  Time: {duration:.1f}s")
+                    print(f"💡 Check quota: run 'claude' then type '/usage'")
                     print(f"{'─'*60}\n")
 
                 # Get summary from git log
