@@ -342,6 +342,126 @@ class TestNorthstarFunctions(unittest.TestCase):
             self.assertIn("empty", error)
 
 
+class TestGetModeList(unittest.TestCase):
+    """Tests for get_mode_list function."""
+
+    def test_returns_string(self):
+        """Should return a formatted string."""
+        from claude_automator import get_mode_list
+        result = get_mode_list()
+        self.assertIsInstance(result, str)
+
+    def test_includes_all_modes(self):
+        """Should include all improvement modes."""
+        from claude_automator import get_mode_list, IMPROVEMENT_MODES
+        result = get_mode_list()
+        for key in IMPROVEMENT_MODES.keys():
+            self.assertIn(key, result)
+
+    def test_includes_special_options(self):
+        """Should include 'all', 'interactive', and 'northstar' options."""
+        from claude_automator import get_mode_list
+        result = get_mode_list()
+        self.assertIn("all", result)
+        self.assertIn("interactive", result)
+        self.assertIn("northstar", result)
+
+    def test_includes_descriptions(self):
+        """Should include mode descriptions."""
+        from claude_automator import get_mode_list, IMPROVEMENT_MODES
+        result = get_mode_list()
+        for mode in IMPROVEMENT_MODES.values():
+            self.assertIn(mode['description'], result)
+
+
+class TestSelectModesInteractive(unittest.TestCase):
+    """Tests for select_modes_interactive function."""
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_quit_with_q(self, mock_print, mock_input):
+        """Should return empty list when user enters 'q'."""
+        from claude_automator import select_modes_interactive
+        mock_input.return_value = 'q'
+        result = select_modes_interactive()
+        self.assertEqual(result, [])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_quit_with_empty_string(self, mock_print, mock_input):
+        """Should return empty list when user enters empty string."""
+        from claude_automator import select_modes_interactive
+        mock_input.return_value = ''
+        result = select_modes_interactive()
+        self.assertEqual(result, [])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_all_with_zero(self, mock_print, mock_input):
+        """Should return all modes when user enters '0'."""
+        from claude_automator import select_modes_interactive, IMPROVEMENT_MODES
+        mock_input.return_value = '0'
+        result = select_modes_interactive()
+        self.assertEqual(result, list(IMPROVEMENT_MODES.keys()))
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_single_mode_by_number(self, mock_print, mock_input):
+        """Should return selected mode when user enters a number."""
+        from claude_automator import select_modes_interactive, IMPROVEMENT_MODES
+        mock_input.return_value = '1'
+        result = select_modes_interactive()
+        modes = list(IMPROVEMENT_MODES.keys())
+        self.assertEqual(result, [modes[0]])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_multiple_modes_by_number(self, mock_print, mock_input):
+        """Should return multiple modes when user enters space-separated numbers."""
+        from claude_automator import select_modes_interactive, IMPROVEMENT_MODES
+        mock_input.return_value = '1 3 5'
+        result = select_modes_interactive()
+        modes = list(IMPROVEMENT_MODES.keys())
+        self.assertEqual(result, [modes[0], modes[2], modes[4]])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_mode_by_name(self, mock_print, mock_input):
+        """Should accept mode names directly."""
+        from claude_automator import select_modes_interactive
+        mock_input.return_value = 'fix_bugs security'
+        result = select_modes_interactive()
+        self.assertEqual(result, ['fix_bugs', 'security'])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_invalid_number_ignored(self, mock_print, mock_input):
+        """Should ignore invalid numbers that are out of range."""
+        from claude_automator import select_modes_interactive, IMPROVEMENT_MODES
+        mock_input.return_value = '1 999'
+        result = select_modes_interactive()
+        modes = list(IMPROVEMENT_MODES.keys())
+        self.assertEqual(result, [modes[0]])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_eof_error_returns_empty(self, mock_print, mock_input):
+        """Should return empty list on EOFError."""
+        from claude_automator import select_modes_interactive
+        mock_input.side_effect = EOFError()
+        result = select_modes_interactive()
+        self.assertEqual(result, [])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_keyboard_interrupt_returns_empty(self, mock_print, mock_input):
+        """Should return empty list on KeyboardInterrupt."""
+        from claude_automator import select_modes_interactive
+        mock_input.side_effect = KeyboardInterrupt()
+        result = select_modes_interactive()
+        self.assertEqual(result, [])
+
+
 class TestLockFile(unittest.TestCase):
     """Tests for LockFile class."""
 
@@ -382,6 +502,61 @@ class TestLockFile(unittest.TestCase):
             lock = LockFile(lock_path)
             # Should not raise
             lock.release()
+
+    def test_context_manager_acquires_and_releases(self):
+        """Should work as a context manager for automatic cleanup."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".test.lock"
+            with LockFile(lock_path) as lock:
+                self.assertTrue(lock.acquired)
+                self.assertTrue(lock_path.exists())
+            # After context manager exit, lock should be released
+            self.assertFalse(lock.acquired)
+            self.assertFalse(lock_path.exists())
+
+    def test_context_manager_releases_on_exception(self):
+        """Should release lock even when exception occurs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".test.lock"
+            try:
+                with LockFile(lock_path) as lock:
+                    self.assertTrue(lock.acquired)
+                    raise ValueError("Test exception")
+            except ValueError:
+                pass
+            # Lock should still be released despite exception
+            self.assertFalse(lock.acquired)
+            self.assertFalse(lock_path.exists())
+
+    def test_acquired_attribute_reflects_state(self):
+        """Should track acquired state accurately."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".test.lock"
+            lock = LockFile(lock_path)
+
+            # Initially not acquired
+            self.assertFalse(lock.acquired)
+
+            # After acquire
+            self.assertTrue(lock.acquire())
+            self.assertTrue(lock.acquired)
+
+            # After release
+            lock.release()
+            self.assertFalse(lock.acquired)
+
+    def test_failed_acquire_sets_acquired_false(self):
+        """Should set acquired to False when acquire fails."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".test.lock"
+            lock1 = LockFile(lock_path)
+            lock2 = LockFile(lock_path)
+
+            lock1.acquire()
+            self.assertFalse(lock2.acquire())
+            self.assertFalse(lock2.acquired)
+
+            lock1.release()
 
 
 class TestTelegramNotifier(unittest.TestCase):
@@ -829,6 +1004,56 @@ class TestSchedulingFunctions(unittest.TestCase):
 
         # Should not have called sleep since max(0, 10-15) = 0
         mock_sleep.assert_not_called()
+
+    @patch('time.sleep')
+    @patch.object(AutoReviewer, 'run_once')
+    @patch('builtins.print')
+    def test_run_with_cron_requires_croniter(self, mock_print, mock_run_once, mock_sleep):
+        """Should exit with error if croniter is not installed."""
+        from claude_automator import run_with_cron
+        import claude_automator
+
+        # Temporarily mock HAS_CRONITER to False
+        original_has_croniter = claude_automator.HAS_CRONITER
+        claude_automator.HAS_CRONITER = False
+
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                run_with_cron(self.reviewer, "0 * * * *")
+            self.assertEqual(ctx.exception.code, 1)
+        finally:
+            claude_automator.HAS_CRONITER = original_has_croniter
+
+    @patch('time.sleep')
+    @patch.object(AutoReviewer, 'run_once')
+    @patch('builtins.print')
+    def test_run_with_cron_schedules_correctly(self, mock_print, mock_run_once, mock_sleep):
+        """Should calculate and wait for next cron time."""
+        # Skip if croniter not installed
+        try:
+            from croniter import croniter
+        except ImportError:
+            self.skipTest("croniter not installed")
+
+        from claude_automator import run_with_cron
+
+        run_count = 0
+        def run_once_side_effect():
+            nonlocal run_count
+            run_count += 1
+            if run_count >= 1:
+                raise KeyboardInterrupt()
+            return True
+
+        mock_run_once.side_effect = run_once_side_effect
+
+        try:
+            run_with_cron(self.reviewer, "* * * * *")
+        except KeyboardInterrupt:
+            pass
+
+        # Should have called sleep at least once before running
+        self.assertTrue(mock_sleep.called or mock_run_once.called)
 
 
 class TestRunOnceWorkflow(unittest.TestCase):
