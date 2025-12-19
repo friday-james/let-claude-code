@@ -848,41 +848,37 @@ class AutoReviewer:
     def run_claude(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
         """Run Claude CLI with the given prompt, streaming output in real-time."""
         try:
-            process = subprocess.Popen(
-                ["claude", "--print", prompt],
-                cwd=self.project_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            output_lines = []
-            start_time = time.time()
+            # Write prompt to a temp file to avoid command line length limits
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+                f.write(prompt)
+                prompt_file = f.name
 
-            while True:
-                # Check timeout
-                if time.time() - start_time > timeout:
-                    process.kill()
-                    return False, "Claude timed out"
+            try:
+                # Run claude with prompt from file, output goes directly to terminal
+                result = subprocess.run(
+                    f'claude --print "$(cat \'{prompt_file}\')"',
+                    cwd=self.project_dir,
+                    shell=True,
+                    timeout=timeout,
+                )
+                success = result.returncode == 0
 
-                line = process.stdout.readline()
-                if line:
-                    print(line, end='', flush=True)
-                    output_lines.append(line)
-                elif process.poll() is not None:
-                    break
+                # Get summary from git log
+                if success:
+                    _, log_output = self.run_cmd(["git", "log", "--oneline", f"{self.base_branch}..HEAD"])
+                    summary = f"Changes made:\n{log_output}" if log_output.strip() else "Claude completed"
+                else:
+                    summary = "Claude failed"
 
-            # Get any remaining output
-            remaining = process.stdout.read()
-            if remaining:
-                print(remaining, end='', flush=True)
-                output_lines.append(remaining)
+                return success, summary
+            finally:
+                os.unlink(prompt_file)
 
-            return process.returncode == 0, ''.join(output_lines)
+        except subprocess.TimeoutExpired:
+            return False, "Claude timed out"
         except FileNotFoundError:
-            return False, "Claude CLI not found. Install with: npm install -g @anthropic/claude-code"
-        except PermissionError:
-            return False, "Permission denied running Claude CLI"
+            return False, "Claude CLI not found"
         except OSError as e:
             return False, f"Failed to run Claude: {e}"
 

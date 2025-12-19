@@ -6,9 +6,11 @@ and core logic. Run with: python -m pytest test_claude_automator.py -v
 or simply: python test_claude_automator.py
 """
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 from claude_automator import (
     validate_path,
@@ -20,6 +22,9 @@ from claude_automator import (
     create_default_northstar,
     IMPROVEMENT_MODES,
     NORTHSTAR_TEMPLATE,
+    LockFile,
+    TelegramNotifier,
+    AutoReviewer,
 )
 
 
@@ -288,6 +293,296 @@ class TestNorthstarFunctions(unittest.TestCase):
             prompt, error = load_northstar_prompt(project_dir)
             self.assertIsNone(prompt)
             self.assertIn("empty", error)
+
+
+class TestLockFile(unittest.TestCase):
+    """Tests for LockFile class."""
+
+    def test_acquire_and_release(self):
+        """Should acquire and release lock successfully."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".test.lock"
+            lock = LockFile(lock_path)
+
+            # Should acquire successfully
+            self.assertTrue(lock.acquire())
+            self.assertTrue(lock_path.exists())
+
+            # Lock file should contain PID
+            content = lock_path.read_text()
+            self.assertIn(str(os.getpid()), content)
+
+            # Release should clean up
+            lock.release()
+            self.assertFalse(lock_path.exists())
+
+    def test_cannot_acquire_twice(self):
+        """Should not allow acquiring the same lock twice."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".test.lock"
+            lock1 = LockFile(lock_path)
+            lock2 = LockFile(lock_path)
+
+            self.assertTrue(lock1.acquire())
+            self.assertFalse(lock2.acquire())
+
+            lock1.release()
+
+    def test_release_nonexistent_lock(self):
+        """Should handle releasing a lock that doesn't exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = Path(tmpdir) / ".nonexistent.lock"
+            lock = LockFile(lock_path)
+            # Should not raise
+            lock.release()
+
+
+class TestTelegramNotifier(unittest.TestCase):
+    """Tests for TelegramNotifier class."""
+
+    def test_disabled_when_no_credentials(self):
+        """Should be disabled when credentials are missing."""
+        notifier = TelegramNotifier(None, None)
+        self.assertFalse(notifier.enabled)
+
+        notifier = TelegramNotifier("token", None)
+        self.assertFalse(notifier.enabled)
+
+        notifier = TelegramNotifier(None, "chat_id")
+        self.assertFalse(notifier.enabled)
+
+    def test_enabled_with_credentials(self):
+        """Should be enabled when both credentials provided."""
+        notifier = TelegramNotifier("token", "chat_id")
+        self.assertTrue(notifier.enabled)
+
+    def test_send_returns_false_when_disabled(self):
+        """Should return False without sending when disabled."""
+        notifier = TelegramNotifier(None, None)
+        result = notifier.send("test message")
+        self.assertFalse(result)
+
+    @patch('urllib.request.urlopen')
+    def test_send_success(self, mock_urlopen):
+        """Should send message and return True on success."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        notifier = TelegramNotifier("bot_token", "chat_id")
+        result = notifier.send("test message")
+
+        self.assertTrue(result)
+        mock_urlopen.assert_called_once()
+
+    @patch('urllib.request.urlopen')
+    def test_send_failure(self, mock_urlopen):
+        """Should return False on network error."""
+        import urllib.error
+        mock_urlopen.side_effect = urllib.error.URLError("Network error")
+
+        notifier = TelegramNotifier("bot_token", "chat_id")
+        result = notifier.send("test message")
+
+        self.assertFalse(result)
+
+
+class TestAutoReviewer(unittest.TestCase):
+    """Tests for AutoReviewer class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.tmpdir = tempfile.mkdtemp()
+        self.reviewer = AutoReviewer(
+            project_dir=self.tmpdir,
+            base_branch="main",
+            auto_merge=False,
+            max_iterations=3,
+            modes=["fix_bugs"]
+        )
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_initialization(self):
+        """Should initialize with correct default values."""
+        self.assertEqual(self.reviewer.base_branch, "main")
+        self.assertFalse(self.reviewer.auto_merge)
+        self.assertEqual(self.reviewer.max_iterations, 3)
+        self.assertEqual(self.reviewer.modes, ["fix_bugs"])
+        self.assertTrue(self.reviewer.project_dir.is_absolute())
+
+    def test_get_mode_names(self):
+        """Should return human-readable mode names."""
+        result = self.reviewer.get_mode_names()
+        self.assertEqual(result, "Fix Bugs")
+
+        multi_mode_reviewer = AutoReviewer(
+            project_dir=self.tmpdir,
+            modes=["fix_bugs", "security"]
+        )
+        result = multi_mode_reviewer.get_mode_names()
+        self.assertEqual(result, "Fix Bugs, Security Review")
+
+    def test_generate_branch_name(self):
+        """Should generate valid branch names."""
+        branch = self.reviewer.generate_branch_name()
+        self.assertTrue(branch.startswith("auto-fix-bugs/"))
+        self.assertLessEqual(len(branch), 250)
+        # Should be unique
+        branch2 = self.reviewer.generate_branch_name()
+        self.assertNotEqual(branch, branch2)
+
+    def test_log_writes_to_file(self):
+        """Should write log messages to file."""
+        self.reviewer.log("Test message")
+        log_content = self.reviewer.log_file.read_text()
+        self.assertIn("Test message", log_content)
+
+    @patch('subprocess.run')
+    def test_run_cmd_success(self, mock_run):
+        """Should return success and output on successful command."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="output",
+            stderr=""
+        )
+
+        success, output = self.reviewer.run_cmd(["echo", "test"])
+
+        self.assertTrue(success)
+        self.assertEqual(output, "output")
+
+    @patch('subprocess.run')
+    def test_run_cmd_failure(self, mock_run):
+        """Should return failure and output on failed command."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="error message"
+        )
+
+        success, output = self.reviewer.run_cmd(["false"])
+
+        self.assertFalse(success)
+        self.assertIn("error message", output)
+
+    @patch('subprocess.run')
+    def test_run_cmd_timeout(self, mock_run):
+        """Should handle command timeout gracefully."""
+        import subprocess
+        mock_run.side_effect = subprocess.TimeoutExpired("cmd", 60)
+
+        success, output = self.reviewer.run_cmd(["sleep", "999"])
+
+        self.assertFalse(success)
+        self.assertIn("timed out", output)
+
+    @patch('subprocess.run')
+    def test_run_cmd_command_not_found(self, mock_run):
+        """Should handle command not found gracefully."""
+        mock_run.side_effect = FileNotFoundError()
+
+        success, output = self.reviewer.run_cmd(["nonexistent_cmd"])
+
+        self.assertFalse(success)
+        self.assertIn("not found", output)
+
+    @patch('subprocess.Popen')
+    def test_run_claude_command_not_found(self, mock_popen):
+        """Should return helpful error when Claude CLI not found."""
+        mock_popen.side_effect = FileNotFoundError()
+
+        success, output = self.reviewer.run_claude("test prompt")
+
+        self.assertFalse(success)
+        self.assertIn("Claude CLI not found", output)
+        self.assertIn("npm install", output)
+
+    @patch.object(AutoReviewer, 'run_cmd')
+    def test_has_commits_ahead_true(self, mock_run_cmd):
+        """Should detect commits ahead of base branch."""
+        mock_run_cmd.return_value = (True, "5")
+
+        result = self.reviewer.has_commits_ahead()
+
+        self.assertTrue(result)
+
+    @patch.object(AutoReviewer, 'run_cmd')
+    def test_has_commits_ahead_false(self, mock_run_cmd):
+        """Should detect no commits ahead of base branch."""
+        mock_run_cmd.return_value = (True, "0")
+
+        result = self.reviewer.has_commits_ahead()
+
+        self.assertFalse(result)
+
+    @patch.object(AutoReviewer, 'run_cmd')
+    def test_has_commits_ahead_invalid_output(self, mock_run_cmd):
+        """Should handle invalid git output gracefully."""
+        mock_run_cmd.return_value = (True, "not a number")
+
+        result = self.reviewer.has_commits_ahead()
+
+        self.assertFalse(result)
+
+    @patch.object(AutoReviewer, 'run_cmd')
+    def test_merge_pr(self, mock_run_cmd):
+        """Should call gh with correct arguments."""
+        mock_run_cmd.return_value = (True, "Merged")
+
+        result = self.reviewer.merge_pr("https://github.com/owner/repo/pull/123")
+
+        self.assertTrue(result)
+        mock_run_cmd.assert_called_once()
+        call_args = mock_run_cmd.call_args[0][0]
+        self.assertIn("gh", call_args)
+        self.assertIn("merge", call_args)
+        self.assertIn("123", call_args)
+
+    @patch.object(AutoReviewer, 'run_cmd')
+    def test_cleanup_branch(self, mock_run_cmd):
+        """Should checkout base branch on cleanup."""
+        mock_run_cmd.return_value = (True, "")
+        self.reviewer.current_branch = "test-branch"
+
+        self.reviewer.cleanup_branch()
+
+        mock_run_cmd.assert_called_once()
+        call_args = mock_run_cmd.call_args[0][0]
+        self.assertIn("checkout", call_args)
+        self.assertIn("main", call_args)
+        self.assertIsNone(self.reviewer.current_branch)
+
+    @patch.object(AutoReviewer, 'run_claude')
+    def test_review_pr_approved(self, mock_run_claude):
+        """Should detect PR approval correctly."""
+        mock_run_claude.return_value = (True, "APPROVED - looks good!")
+
+        approved, output, feedback = self.reviewer.review_pr_with_claude(
+            "https://github.com/owner/repo/pull/123"
+        )
+
+        self.assertTrue(approved)
+
+    @patch.object(AutoReviewer, 'run_claude')
+    def test_review_pr_changes_requested(self, mock_run_claude):
+        """Should detect changes requested correctly."""
+        mock_run_claude.return_value = (
+            True,
+            "CHANGES_REQUESTED: Please fix the formatting"
+        )
+
+        approved, output, feedback = self.reviewer.review_pr_with_claude(
+            "https://github.com/owner/repo/pull/123"
+        )
+
+        self.assertFalse(approved)
+        self.assertIn("formatting", feedback)
 
 
 if __name__ == "__main__":
