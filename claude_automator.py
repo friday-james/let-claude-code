@@ -10,19 +10,22 @@ Usage:
     ./claude_automator.py --list-modes              # Show available modes
 """
 
-import subprocess
+from __future__ import annotations
+
 import argparse
-import time
-import re
-import os
-import sys
 import fcntl
+import os
 import random
+import re
 import string
-import urllib.request
+import subprocess
+import sys
+import time
 import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import IO
 
 try:
     from croniter import croniter
@@ -583,11 +586,18 @@ def select_modes_interactive() -> list[str]:
 # ============================================================================
 
 class LockFile:
-    def __init__(self, path: Path):
+    """File-based lock to prevent concurrent execution of the automator.
+
+    Uses fcntl.flock for advisory locking. The lock file contains the PID
+    and timestamp of the process that acquired the lock.
+    """
+
+    def __init__(self, path: Path) -> None:
         self.path = path
-        self.fd = None
+        self.fd: IO[str] | None = None
 
     def acquire(self) -> bool:
+        """Attempt to acquire the lock. Returns True if successful."""
         try:
             self.fd = open(self.path, 'w')
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -600,28 +610,32 @@ class LockFile:
                 self.fd = None
             return False
 
-    def release(self):
+    def release(self) -> None:
+        """Release the lock and remove the lock file."""
         if self.fd:
             try:
                 fcntl.flock(self.fd, fcntl.LOCK_UN)
                 self.fd.close()
-            except:
+            except OSError:
                 pass
             finally:
                 self.fd = None
         try:
             self.path.unlink()
-        except:
+        except FileNotFoundError:
             pass
 
 
 class TelegramNotifier:
-    def __init__(self, bot_token: str | None, chat_id: str | None):
+    """Sends notifications to Telegram when review cycles complete or fail."""
+
+    def __init__(self, bot_token: str | None, chat_id: str | None) -> None:
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.enabled = bool(bot_token and chat_id)
 
     def send(self, message: str) -> bool:
+        """Send a message to the configured Telegram chat. Returns True on success."""
         if not self.enabled:
             return False
         try:
@@ -635,32 +649,53 @@ class TelegramNotifier:
             req = urllib.request.Request(url, data=data)
             with urllib.request.urlopen(req, timeout=10) as response:
                 return response.status == 200
-        except Exception as e:
+        except (urllib.error.URLError, OSError) as e:
             print(f"Failed to send Telegram message: {e}")
             return False
 
 
 class AutoReviewer:
-    def __init__(self, project_dir: str, base_branch: str = "main",
-                 auto_merge: bool = False, max_iterations: int = 3,
-                 tg_bot_token: str | None = None, tg_chat_id: str | None = None,
-                 review_prompt: str | None = None, modes: list[str] | None = None):
+    """Orchestrates automated code review cycles using Claude.
+
+    Workflow:
+    1. Creates a feature branch from base_branch
+    2. Runs Claude with the configured improvement prompt
+    3. Creates a PR if changes were made
+    4. Has a reviewer Claude review the PR
+    5. If changes requested, has a fixer Claude address them
+    6. Loops until approved or max_iterations reached
+    7. Optionally auto-merges approved PRs
+    """
+
+    def __init__(
+        self,
+        project_dir: str,
+        base_branch: str = "main",
+        auto_merge: bool = False,
+        max_iterations: int = 3,
+        tg_bot_token: str | None = None,
+        tg_chat_id: str | None = None,
+        review_prompt: str | None = None,
+        modes: list[str] | None = None,
+    ) -> None:
         self.project_dir = Path(project_dir).resolve()
         self.auto_merge = auto_merge
         self.base_branch = base_branch
         self.log_file = self.project_dir / "auto_review.log"
         self.lock_file = LockFile(self.project_dir / ".auto_review.lock")
-        self.current_branch = None
+        self.current_branch: str | None = None
         self.telegram = TelegramNotifier(tg_bot_token, tg_chat_id)
         self.max_iterations = max_iterations
         self.modes = modes or ["fix_bugs"]
         self.review_prompt = review_prompt or get_combined_prompt(self.modes)
 
     def get_mode_names(self) -> str:
+        """Get human-readable names for the configured modes."""
         names = [IMPROVEMENT_MODES[m]["name"] for m in self.modes if m in IMPROVEMENT_MODES]
         return ", ".join(names) if names else "Unknown"
 
-    def log(self, msg: str):
+    def log(self, msg: str) -> None:
+        """Log a message to stdout and the log file with timestamp."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_line = f"[{timestamp}] {msg}"
         print(log_line)
@@ -668,30 +703,42 @@ class AutoReviewer:
             f.write(log_line + "\n")
 
     def run_cmd(self, cmd: list[str], timeout: int = 60) -> tuple[bool, str]:
+        """Run a shell command and return (success, output)."""
         try:
-            result = subprocess.run(cmd, cwd=self.project_dir, capture_output=True, text=True, timeout=timeout)
+            result = subprocess.run(
+                cmd, cwd=self.project_dir, capture_output=True, text=True, timeout=timeout
+            )
             return result.returncode == 0, result.stdout + result.stderr
         except subprocess.TimeoutExpired:
             return False, "Command timed out"
-        except Exception as e:
+        except OSError as e:
             return False, str(e)
 
     def run_claude(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
+        """Run Claude CLI with the given prompt and return (success, output)."""
         try:
-            result = subprocess.run(["claude", "--print", prompt], cwd=self.project_dir, capture_output=True, text=True, timeout=timeout)
+            result = subprocess.run(
+                ["claude", "--print", prompt],
+                cwd=self.project_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
             return result.returncode == 0, result.stdout + result.stderr
         except subprocess.TimeoutExpired:
             return False, "Claude timed out"
-        except Exception as e:
+        except OSError as e:
             return False, str(e)
 
     def generate_branch_name(self) -> str:
+        """Generate a unique branch name based on mode and timestamp."""
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         suffix = ''.join(random.choices(string.ascii_lowercase, k=4))
         mode_prefix = self.modes[0].replace("_", "-") if self.modes else "review"
         return f"auto-{mode_prefix}/{timestamp}-{suffix}"
 
     def create_branch(self, branch_name: str) -> bool:
+        """Create a new branch from base_branch and check it out."""
         self.run_cmd(["git", "checkout", self.base_branch])
         self.run_cmd(["git", "pull", "--rebase"])
         success, output = self.run_cmd(["git", "checkout", "-b", branch_name])
@@ -701,10 +748,11 @@ class AutoReviewer:
         return success
 
     def has_commits_ahead(self) -> bool:
+        """Check if current branch has commits ahead of base branch."""
         success, output = self.run_cmd(["git", "rev-list", "--count", f"{self.base_branch}..HEAD"])
         try:
             return success and int(output.strip()) > 0
-        except:
+        except ValueError:
             return False
 
     def create_pull_request(self, summary: str) -> str | None:
