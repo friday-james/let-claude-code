@@ -18,6 +18,9 @@ from claude_automator import (
     validate_cron_expression,
     validate_positive_int,
     get_combined_prompt,
+    get_mode_list,
+    get_pr_review_prompt,
+    get_fix_feedback_prompt,
     load_northstar_prompt,
     create_default_northstar,
     IMPROVEMENT_MODES,
@@ -660,6 +663,262 @@ class TestAutoReviewer(unittest.TestCase):
 
         self.assertFalse(approved)
         self.assertIn("formatting", feedback)
+
+
+class TestGetModeList(unittest.TestCase):
+    """Tests for get_mode_list function."""
+
+    def test_returns_string(self):
+        """Should return a string with mode information."""
+        result = get_mode_list()
+        self.assertIsInstance(result, str)
+
+    def test_contains_all_modes(self):
+        """Should contain all defined improvement modes."""
+        result = get_mode_list()
+        for mode_key in IMPROVEMENT_MODES:
+            self.assertIn(mode_key, result)
+
+    def test_contains_special_modes(self):
+        """Should contain special modes (all, interactive, northstar)."""
+        result = get_mode_list()
+        self.assertIn("all", result)
+        self.assertIn("interactive", result)
+        self.assertIn("northstar", result)
+
+
+class TestPromptGenerators(unittest.TestCase):
+    """Tests for prompt generator functions."""
+
+    def test_get_pr_review_prompt_contains_pr_number(self):
+        """Should include PR number in the prompt."""
+        result = get_pr_review_prompt("123")
+        self.assertIn("123", result)
+        self.assertIn("APPROVED", result)
+        self.assertIn("CHANGES_REQUESTED", result)
+
+    def test_get_fix_feedback_prompt_contains_pr_and_feedback(self):
+        """Should include PR number and feedback in the prompt."""
+        result = get_fix_feedback_prompt("456", "Please fix the typo")
+        self.assertIn("456", result)
+        self.assertIn("Please fix the typo", result)
+
+    def test_get_fix_feedback_prompt_includes_instructions(self):
+        """Should include instructions for fixing."""
+        result = get_fix_feedback_prompt("789", "feedback")
+        result_lower = result.lower()
+        self.assertIn("checkout", result_lower)
+        self.assertIn("commit", result_lower)
+        self.assertIn("push", result_lower)
+
+
+class TestAutoReviewerReviewPrEdgeCases(unittest.TestCase):
+    """Additional tests for review_pr_with_claude edge cases."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.tmpdir = tempfile.mkdtemp()
+        self.reviewer = AutoReviewer(
+            project_dir=self.tmpdir,
+            base_branch="main",
+            modes=["fix_bugs"]
+        )
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch.object(AutoReviewer, 'run_claude')
+    def test_review_pr_lgtm(self, mock_run_claude):
+        """Should detect LGTM as approval."""
+        mock_run_claude.return_value = (True, "LGTM, ship it!")
+
+        approved, output, feedback = self.reviewer.review_pr_with_claude(
+            "https://github.com/owner/repo/pull/123"
+        )
+
+        self.assertTrue(approved)
+
+    @patch.object(AutoReviewer, 'run_claude')
+    def test_review_pr_approved_mixed_case(self, mock_run_claude):
+        """Should detect approval regardless of case."""
+        mock_run_claude.return_value = (True, "Approved - the changes look great")
+
+        approved, output, feedback = self.reviewer.review_pr_with_claude(
+            "https://github.com/owner/repo/pull/123"
+        )
+
+        self.assertTrue(approved)
+
+    @patch.object(AutoReviewer, 'run_claude')
+    def test_review_pr_changes_requested_overrides_approved(self, mock_run_claude):
+        """Should prioritize CHANGES_REQUESTED over approved mentions."""
+        mock_run_claude.return_value = (
+            True,
+            "I would have approved this but CHANGES_REQUESTED: fix the bug first"
+        )
+
+        approved, output, feedback = self.reviewer.review_pr_with_claude(
+            "https://github.com/owner/repo/pull/123"
+        )
+
+        self.assertFalse(approved)
+        self.assertIn("fix the bug", feedback)
+
+    @patch.object(AutoReviewer, 'run_claude')
+    def test_review_pr_extracts_feedback_from_last_lines(self, mock_run_claude):
+        """Should extract feedback from last lines when no CHANGES_REQUESTED marker."""
+        mock_run_claude.return_value = (
+            True,
+            "Review complete.\nChanges needed but not using marker.\nPlease fix the indentation."
+        )
+
+        approved, output, feedback = self.reviewer.review_pr_with_claude(
+            "https://github.com/owner/repo/pull/123"
+        )
+
+        # Neither approved nor lgtm, so not approved
+        self.assertFalse(approved)
+        self.assertIn("indentation", feedback)
+
+
+class TestAutoReviewerFixPrFeedback(unittest.TestCase):
+    """Tests for fix_pr_feedback method."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.tmpdir = tempfile.mkdtemp()
+        self.reviewer = AutoReviewer(
+            project_dir=self.tmpdir,
+            base_branch="main",
+            modes=["fix_bugs"]
+        )
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch.object(AutoReviewer, 'run_claude')
+    def test_fix_pr_feedback_calls_claude_with_correct_prompt(self, mock_run_claude):
+        """Should call Claude with the fix feedback prompt."""
+        mock_run_claude.return_value = (True, "Fixed the issues")
+
+        success, output = self.reviewer.fix_pr_feedback(
+            "https://github.com/owner/repo/pull/123",
+            "Please fix the typo in line 42",
+            1
+        )
+
+        self.assertTrue(success)
+        mock_run_claude.assert_called_once()
+        prompt = mock_run_claude.call_args[0][0]
+        self.assertIn("123", prompt)
+        self.assertIn("typo in line 42", prompt)
+
+    @patch.object(AutoReviewer, 'run_claude')
+    def test_fix_pr_feedback_failure(self, mock_run_claude):
+        """Should return failure when Claude fails."""
+        mock_run_claude.return_value = (False, "Error occurred")
+
+        success, output = self.reviewer.fix_pr_feedback(
+            "https://github.com/owner/repo/pull/123",
+            "Please fix this",
+            1
+        )
+
+        self.assertFalse(success)
+
+
+class TestAutoReviewerRunOnce(unittest.TestCase):
+    """Tests for run_once method."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.tmpdir = tempfile.mkdtemp()
+        self.reviewer = AutoReviewer(
+            project_dir=self.tmpdir,
+            base_branch="main",
+            modes=["fix_bugs"]
+        )
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch.object(LockFile, 'acquire')
+    def test_run_once_skips_when_locked(self, mock_acquire):
+        """Should skip when lock cannot be acquired."""
+        mock_acquire.return_value = False
+
+        result = self.reviewer.run_once()
+
+        self.assertFalse(result)
+
+    @patch.object(LockFile, 'release')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    def test_run_once_fails_when_branch_creation_fails(
+        self, mock_cleanup, mock_create_branch, mock_acquire, mock_release
+    ):
+        """Should fail and cleanup when branch creation fails."""
+        mock_acquire.return_value = True
+        mock_create_branch.return_value = False
+
+        result = self.reviewer.run_once()
+
+        self.assertFalse(result)
+        mock_release.assert_called_once()
+
+    @patch.object(LockFile, 'release')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    def test_run_once_success_no_changes(
+        self, mock_cleanup, mock_has_commits, mock_run_claude,
+        mock_create_branch, mock_acquire, mock_release
+    ):
+        """Should succeed when Claude runs but makes no changes."""
+        mock_acquire.return_value = True
+        mock_create_branch.return_value = True
+        mock_run_claude.return_value = (True, "No bugs found")
+        mock_has_commits.return_value = False
+
+        result = self.reviewer.run_once()
+
+        self.assertTrue(result)
+        mock_cleanup.assert_called()
+        mock_release.assert_called_once()
+
+    @patch.object(LockFile, 'release')
+    @patch.object(LockFile, 'acquire')
+    @patch.object(AutoReviewer, 'create_branch')
+    @patch.object(AutoReviewer, 'run_claude')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    @patch.object(AutoReviewer, 'create_pull_request')
+    @patch.object(AutoReviewer, 'review_pr_with_claude')
+    @patch.object(AutoReviewer, 'cleanup_branch')
+    def test_run_once_pr_approved_on_first_try(
+        self, mock_cleanup, mock_review, mock_create_pr, mock_has_commits,
+        mock_run_claude, mock_create_branch, mock_acquire, mock_release
+    ):
+        """Should complete successfully when PR is approved on first review."""
+        mock_acquire.return_value = True
+        mock_create_branch.return_value = True
+        mock_run_claude.return_value = (True, "Fixed bugs")
+        mock_has_commits.return_value = True
+        mock_create_pr.return_value = "https://github.com/owner/repo/pull/123"
+        mock_review.return_value = (True, "APPROVED", "")
+
+        result = self.reviewer.run_once()
+
+        self.assertTrue(result)
+        mock_cleanup.assert_called()
 
 
 if __name__ == "__main__":
