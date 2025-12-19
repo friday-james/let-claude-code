@@ -1059,7 +1059,7 @@ class AutoReviewer:
         success, _ = self.run_cmd(["gh", "pr", "merge", pr_number, "--squash", "--delete-branch"], timeout=60)
         return success
 
-    def cleanup_branch(self):
+    def cleanup_branch(self) -> None:
         if self.current_branch:
             self.run_cmd(["git", "checkout", self.base_branch])
             self.current_branch = None
@@ -1132,7 +1132,7 @@ class AutoReviewer:
 # SCHEDULING
 # ============================================================================
 
-def run_loop(reviewer: AutoReviewer):
+def run_loop(reviewer: AutoReviewer) -> None:
     print("Running continuously. Press Ctrl+C to stop.")
     run_count = 0
     while True:
@@ -1144,7 +1144,7 @@ def run_loop(reviewer: AutoReviewer):
         print(f"\nRun #{run_count} complete. Starting next run immediately...")
 
 
-def run_with_interval(reviewer: AutoReviewer, interval: int):
+def run_with_interval(reviewer: AutoReviewer, interval: int) -> None:
     print(f"Running every {interval}s. Press Ctrl+C to stop.")
     while True:
         start = time.time()
@@ -1155,7 +1155,7 @@ def run_with_interval(reviewer: AutoReviewer, interval: int):
             time.sleep(sleep_time)
 
 
-def run_with_cron(reviewer: AutoReviewer, cron_expr: str):
+def run_with_cron(reviewer: AutoReviewer, cron_expr: str) -> None:
     if not HAS_CRONITER:
         print("Error: pip install croniter")
         sys.exit(1)
@@ -1173,7 +1173,7 @@ def run_with_cron(reviewer: AutoReviewer, cron_expr: str):
 # CLI
 # ============================================================================
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Claude Automator - Automatically improve your codebase",
         formatter_class=argparse.RawDescriptionHelpFormatter,
