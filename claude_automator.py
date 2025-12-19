@@ -668,6 +668,15 @@ def load_northstar_prompt(project_dir: Path) -> tuple[str | None, str | None]:
 
 
 def select_modes_interactive() -> list[str]:
+    """Interactively prompt the user to select improvement modes.
+
+    Displays a numbered list of available modes and allows the user to select
+    one or more by entering space-separated numbers, '0' for all modes, or 'q' to quit.
+
+    Returns:
+        List of selected mode keys (e.g., ['fix_bugs', 'security']).
+        Returns an empty list if the user quits or cancels.
+    """
     print("\n" + "=" * 60)
     print("Select improvement modes to run")
     print("=" * 60 + "\n")

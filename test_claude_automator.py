@@ -20,6 +20,7 @@ from claude_automator import (
     get_combined_prompt,
     load_northstar_prompt,
     create_default_northstar,
+    select_modes_interactive,
     IMPROVEMENT_MODES,
     NORTHSTAR_TEMPLATE,
     LockFile,
@@ -293,6 +294,109 @@ class TestNorthstarFunctions(unittest.TestCase):
             prompt, error = load_northstar_prompt(project_dir)
             self.assertIsNone(prompt)
             self.assertIn("empty", error)
+
+
+class TestSelectModesInteractive(unittest.TestCase):
+    """Tests for select_modes_interactive function."""
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_single_mode_by_number(self, mock_print, mock_input):
+        """Should return single mode when user enters one number."""
+        mock_input.return_value = "1"
+
+        result = select_modes_interactive()
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0], list(IMPROVEMENT_MODES.keys())[0])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_multiple_modes_by_number(self, mock_print, mock_input):
+        """Should return multiple modes when user enters space-separated numbers."""
+        mock_input.return_value = "1 2 3"
+        modes_list = list(IMPROVEMENT_MODES.keys())
+
+        result = select_modes_interactive()
+
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result[0], modes_list[0])
+        self.assertEqual(result[1], modes_list[1])
+        self.assertEqual(result[2], modes_list[2])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_all_modes(self, mock_print, mock_input):
+        """Should return all modes when user enters 0."""
+        mock_input.return_value = "0"
+
+        result = select_modes_interactive()
+
+        self.assertEqual(result, list(IMPROVEMENT_MODES.keys()))
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_quit_returns_empty(self, mock_print, mock_input):
+        """Should return empty list when user enters q."""
+        mock_input.return_value = "q"
+
+        result = select_modes_interactive()
+
+        self.assertEqual(result, [])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_empty_input_returns_empty(self, mock_print, mock_input):
+        """Should return empty list when user enters nothing."""
+        mock_input.return_value = ""
+
+        result = select_modes_interactive()
+
+        self.assertEqual(result, [])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_keyboard_interrupt_returns_empty(self, mock_print, mock_input):
+        """Should return empty list on KeyboardInterrupt."""
+        mock_input.side_effect = KeyboardInterrupt()
+
+        result = select_modes_interactive()
+
+        self.assertEqual(result, [])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_eof_returns_empty(self, mock_print, mock_input):
+        """Should return empty list on EOFError."""
+        mock_input.side_effect = EOFError()
+
+        result = select_modes_interactive()
+
+        self.assertEqual(result, [])
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_select_mode_by_name(self, mock_print, mock_input):
+        """Should accept mode names as input."""
+        mock_input.return_value = "fix_bugs security"
+
+        result = select_modes_interactive()
+
+        self.assertIn("fix_bugs", result)
+        self.assertIn("security", result)
+
+    @patch('builtins.input')
+    @patch('builtins.print')
+    def test_invalid_numbers_ignored(self, mock_print, mock_input):
+        """Should ignore invalid mode numbers."""
+        mock_input.return_value = "1 99 2"  # 99 is out of range
+        modes_list = list(IMPROVEMENT_MODES.keys())
+
+        result = select_modes_interactive()
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], modes_list[0])
+        self.assertEqual(result[1], modes_list[1])
 
 
 class TestLockFile(unittest.TestCase):
@@ -629,6 +733,51 @@ class TestAutoReviewer(unittest.TestCase):
         """Should return None when git push fails."""
         mock_has_commits.return_value = True
         mock_run_cmd.return_value = (False, "push failed")
+        self.reviewer.current_branch = "test-branch"
+
+        result = self.reviewer.create_pull_request("Test summary")
+
+        self.assertIsNone(result)
+
+    @patch.object(AutoReviewer, 'run_cmd')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    def test_create_pull_request_url_in_multiline_output(self, mock_has_commits, mock_run_cmd):
+        """Should extract PR URL from multi-line gh output."""
+        mock_has_commits.return_value = True
+        mock_run_cmd.side_effect = [
+            (True, ""),  # git push
+            (True, "Creating pull request for test-branch into main\nhttps://github.com/owner/repo/pull/456\n"),
+        ]
+        self.reviewer.current_branch = "test-branch"
+
+        result = self.reviewer.create_pull_request("Test summary")
+
+        self.assertEqual(result, "https://github.com/owner/repo/pull/456")
+
+    @patch.object(AutoReviewer, 'run_cmd')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    def test_create_pull_request_gh_fails(self, mock_has_commits, mock_run_cmd):
+        """Should return None when gh pr create fails."""
+        mock_has_commits.return_value = True
+        mock_run_cmd.side_effect = [
+            (True, ""),  # git push succeeds
+            (False, "error: could not create pull request"),  # gh pr create fails
+        ]
+        self.reviewer.current_branch = "test-branch"
+
+        result = self.reviewer.create_pull_request("Test summary")
+
+        self.assertIsNone(result)
+
+    @patch.object(AutoReviewer, 'run_cmd')
+    @patch.object(AutoReviewer, 'has_commits_ahead')
+    def test_create_pull_request_no_url_in_output(self, mock_has_commits, mock_run_cmd):
+        """Should return None when gh output doesn't contain a PR URL."""
+        mock_has_commits.return_value = True
+        mock_run_cmd.side_effect = [
+            (True, ""),  # git push
+            (True, "Some unexpected output without a URL"),  # gh pr create
+        ]
         self.reviewer.current_branch = "test-branch"
 
         result = self.reviewer.create_pull_request("Test summary")
