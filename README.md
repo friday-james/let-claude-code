@@ -239,6 +239,8 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 | `--auto-merge` | Auto-merge approved PRs |
 | `--max-iterations N` | Max review-fix rounds (default: `3`) |
 | `--think LEVEL` | Thinking budget: `normal`, `think`, `megathink`, `ultrathink` |
+| `--llm PROVIDER` | LLM CLI to use: `claude` or `codex` |
+| `--codex` | Use Codex CLI (same as `--llm codex`) |
 
 ---
 
@@ -288,6 +290,9 @@ chmod +x claude_automator*.py
 
 # With extended thinking
 ./claude_automator_concurrent.py -d src -m security --think ultrathink
+
+# Use Codex CLI
+./claude_automator_concurrent.py -d src --codex
 ```
 
 ```
@@ -342,7 +347,7 @@ chmod +x claude_automator*.py
 ## Requirements
 
 - **Python 3.10+** (zero dependencies)
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** installed
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** or **Codex CLI** installed
 - **[GitHub CLI](https://cli.github.com/)** (`gh`) installed
 - **Git repo** with remote
 

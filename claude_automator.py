@@ -7,6 +7,7 @@ Zero dependencies beyond Python 3.10+ stdlib. Just download and run.
 Usage:
     ./claude_automator.py --once -m improve_code    # Improve code quality
     ./claude_automator.py --once --northstar        # Iterate towards NORTHSTAR.md goals
+    ./claude_automator.py --once --codex -m fix_bugs  # Run with Codex CLI
     ./claude_automator.py --list-modes              # Show available modes
 """
 
@@ -833,7 +834,7 @@ class TelegramNotifier:
 
 
 class AutoReviewer:
-    """Orchestrates automated code review cycles using Claude.
+    """Orchestrates automated code review cycles using Claude or Codex.
 
     Workflow:
     1. Creates a feature branch from base_branch
@@ -856,6 +857,7 @@ class AutoReviewer:
         review_prompt: str | None = None,
         modes: list[str] | None = None,
         think_level: str = "normal",
+        llm_provider: str = "claude",
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
         self.auto_merge = auto_merge
@@ -870,6 +872,7 @@ class AutoReviewer:
         self.session_cost = 0.0  # Cumulative cost across all runs
         self.session_id: str | None = None  # For continuing sessions
         self.think_level = think_level  # Thinking budget: normal, think, megathink, ultrathink
+        self.llm_provider = llm_provider  # LLM CLI provider: claude or codex
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -905,8 +908,88 @@ class AutoReviewer:
         except OSError as e:
             return False, f"Failed to run {cmd[0]}: {e}"
 
+    def run_codex(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
+        """Run Codex CLI with the given prompt, streaming output in real-time."""
+        import atexit
+        import tempfile
+
+        # Append thinking keyword if not normal
+        if self.think_level != "normal":
+            prompt = f"{prompt}\n\n{self.think_level}"
+
+        prompt_file = None
+
+        def cleanup_temp_file() -> None:
+            """Cleanup temp file on exit - registered with atexit for safety."""
+            if prompt_file and os.path.exists(prompt_file):
+                try:
+                    os.unlink(prompt_file)
+                except OSError:
+                    pass
+
+        try:
+            # Write prompt to a temp file to avoid command line length limits
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+                f.write(prompt)
+                prompt_file = f.name
+
+            atexit.register(cleanup_temp_file)
+
+            try:
+                cmd = ["codex"]
+
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=self.project_dir,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+
+                process.stdin.write(prompt)
+                process.stdin.close()
+
+                start_time = time.time()
+
+                while True:
+                    if time.time() - start_time > timeout:
+                        process.kill()
+                        return False, "Codex timed out"
+
+                    line = process.stdout.readline()
+                    if not line:
+                        if process.poll() is not None:
+                            break
+                        time.sleep(0.01)
+                        continue
+
+                    print(line, end="", flush=True)
+
+                success = process.returncode == 0
+
+                if success:
+                    _, log_output = self.run_cmd(["git", "log", "--oneline", f"{self.base_branch}..HEAD"])
+                    summary = f"Changes made:\n{log_output}" if log_output.strip() else "Codex completed"
+                else:
+                    summary = "Codex failed"
+
+                return success, summary
+            finally:
+                if prompt_file and os.path.exists(prompt_file):
+                    os.unlink(prompt_file)
+                atexit.unregister(cleanup_temp_file)
+
+        except FileNotFoundError:
+            return False, "Codex CLI not found"
+        except OSError as e:
+            return False, f"Failed to run Codex: {e}"
+
     def run_claude(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
         """Run Claude CLI with the given prompt, streaming output in real-time with usage stats."""
+        if self.llm_provider == "codex":
+            return self.run_codex(prompt, timeout=timeout)
+
         import atexit
         import tempfile
         import json
@@ -1249,8 +1332,15 @@ def main():
     parser.add_argument("--prompt-file", type=str, help="Custom prompt file")
     parser.add_argument("--think", type=str, choices=["normal", "think", "megathink", "ultrathink"],
                         default="normal", help="Thinking budget level (default: normal)")
+    parser.add_argument("--llm", type=str, choices=["claude", "codex"], default="claude",
+                        help="LLM CLI to use (default: claude)")
+    parser.add_argument("--codex", action="store_true",
+                        help="Use Codex CLI (shorthand for --llm codex)")
 
     args = parser.parse_args()
+
+    if args.codex:
+        args.llm = "codex"
 
     if args.list_modes:
         print(get_mode_list())
@@ -1334,6 +1424,7 @@ def main():
     print("=" * 60)
     print(f"Project: {args.project_dir}")
     print(f"Branch: {args.base_branch}")
+    print(f"LLM: {args.llm}")
     if "northstar" in selected_modes:
         print("Mode: North Star")
     else:
@@ -1352,6 +1443,7 @@ def main():
         review_prompt=review_prompt,
         modes=selected_modes,
         think_level=args.think,
+        llm_provider=args.llm,
     )
 
     if args.once:

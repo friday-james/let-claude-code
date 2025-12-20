@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Concurrent Claude Automator - Run multiple Claude workers in parallel.
+Concurrent Claude Automator - Run multiple Claude/Codex workers in parallel.
 
 Each worker runs the FULL cycle (improve → PR → review → fix → merge)
 but scoped to a specific directory. Uses git worktrees for true parallelism.
@@ -17,6 +17,7 @@ Usage:
 
     # Same options as main script
     ./claude_automator_concurrent.py -d src -p "Fix bugs" --think ultrathink --auto-merge
+    ./claude_automator_concurrent.py -d src --codex --think ultrathink
 
 Example workers.json:
 [
@@ -132,6 +133,7 @@ def run_worker(
     auto_merge: bool,
     max_iterations: int,
     think_level: str,
+    llm_provider: str,
     tg_bot_token: str | None,
     tg_chat_id: str | None,
 ) -> WorkerResult:
@@ -168,6 +170,7 @@ def run_worker(
         review_prompt=scoped_prompt,
         modes=config.modes or ["improve_code"],
         think_level=think_level,
+        llm_provider=llm_provider,
     )
 
     # Override branch name to include directory
@@ -221,6 +224,7 @@ def run_workers_parallel(
     auto_merge: bool,
     max_iterations: int,
     think_level: str,
+    llm_provider: str,
     max_workers: int | None,
     tg_bot_token: str | None,
     tg_chat_id: str | None,
@@ -233,12 +237,13 @@ def run_workers_parallel(
         max_workers = min(len(configs), os.cpu_count() or 4)
 
     print(f"\n{'='*60}")
-    print(f"Concurrent Claude Automator")
+    print(f"Concurrent Claude/Codex Automator")
     print(f"{'='*60}")
     print(f"Project: {project_dir}")
     print(f"Base branch: {base_branch}")
     print(f"Workers: {len(configs)} directories, {max_workers} parallel")
     print(f"Auto-merge: {auto_merge}")
+    print(f"LLM: {llm_provider}")
     if think_level != "normal":
         print(f"Thinking: {think_level}")
     print(f"{'='*60}")
@@ -280,6 +285,7 @@ def run_workers_parallel(
                 auto_merge=auto_merge,
                 max_iterations=max_iterations,
                 think_level=think_level,
+                llm_provider=llm_provider,
                 tg_bot_token=tg_bot_token,
                 tg_chat_id=tg_chat_id,
             )
@@ -358,7 +364,7 @@ def print_summary(results: list[WorkerResult]) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run multiple Claude workers in parallel, each on its own branch",
+        description="Run multiple Claude/Codex workers in parallel, each on its own branch",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -390,6 +396,10 @@ def main():
     parser.add_argument("--think", type=str,
                         choices=["normal", "think", "megathink", "ultrathink"],
                         default="normal", help="Thinking level")
+    parser.add_argument("--llm", type=str, choices=["claude", "codex"], default="claude",
+                        help="LLM CLI to use (default: claude)")
+    parser.add_argument("--codex", action="store_true",
+                        help="Use Codex CLI (shorthand for --llm codex)")
     parser.add_argument("--max-workers", "-w", type=int,
                         help="Max parallel workers")
 
@@ -404,6 +414,9 @@ def main():
                         help="Show what would be done")
 
     args = parser.parse_args()
+
+    if args.codex:
+        args.llm = "codex"
 
     # Validate inputs
     try:
@@ -487,6 +500,7 @@ def main():
         auto_merge=args.auto_merge,
         max_iterations=args.max_iterations,
         think_level=args.think,
+        llm_provider=args.llm,
         max_workers=args.max_workers,
         tg_bot_token=args.tg_bot_token,
         tg_chat_id=args.tg_chat_id,
