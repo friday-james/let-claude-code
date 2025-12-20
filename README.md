@@ -277,6 +277,11 @@ The thinking keywords are Claude Code magic words that trigger extended reasonin
 - **[GitHub CLI](https://cli.github.com/)** (`gh`) installed
 - **Git repo** with remote
 
+**Recommended:** Enable auto-delete branches in your GitHub repo:
+**Settings → General → Pull Requests → ✓ Automatically delete head branches**
+
+This keeps your repo clean after PRs are merged.
+
 ---
 
 ## Philosophy
