@@ -2,24 +2,27 @@
 """
 Concurrent Claude Automator - Run multiple Claude workers in parallel.
 
-Each worker is assigned ONE directory to work on, preventing race conditions.
-No locks needed - isolation by directory partitioning.
+Each worker runs the FULL cycle (improve → PR → review → fix → merge)
+but scoped to a specific directory. Uses git worktrees for true parallelism.
 
 Usage:
-    # Run with default directory assignments
-    ./claude_automator_concurrent.py --workers 3
+    # Run on specific directories
+    ./claude_automator_concurrent.py -d src scripts -p "Fix bugs"
 
-    # Custom directory/prompt assignments via config
+    # Auto-partition top-level directories
+    ./claude_automator_concurrent.py --auto-partition -p "Improve code quality"
+
+    # Use config file for different prompts per directory
     ./claude_automator_concurrent.py --config workers.json
 
-    # Quick mode: auto-partition top-level directories
-    ./claude_automator_concurrent.py --auto-partition --prompt "Fix bugs in this directory"
+    # Same options as main script
+    ./claude_automator_concurrent.py -d src -p "Fix bugs" --think ultrathink --auto-merge
 
 Example workers.json:
 [
     {"directory": "src", "prompt": "Fix bugs in this directory"},
-    {"directory": "scripts", "prompt": "Add type hints to all functions"},
-    {"directory": "strategies", "prompt": "Optimize performance"}
+    {"directory": "scripts", "prompt": "Add type hints"},
+    {"directory": "lib", "modes": ["security", "fix_bugs"]}
 ]
 """
 
@@ -28,28 +31,44 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import random
-import string
+import shutil
 import subprocess
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
-# Import validators from main module
-from claude_automator import validate_path, validate_branch_name
+from claude_automator import (
+    AutoReviewer,
+    validate_path,
+    validate_branch_name,
+    get_combined_prompt,
+    IMPROVEMENT_MODES,
+)
 
 
 @dataclass
-class WorkerTask:
-    """A task for a single worker."""
-    directory: str  # Relative path from project root
-    prompt: str
-    worker_id: int = 0
-    branch_name: str = ""
-    think_level: str = "normal"  # Thinking budget: normal, think, megathink, ultrathink
+class WorkerConfig:
+    """Configuration for a single worker."""
+    directory: str
+    prompt: str | None = None
+    modes: list[str] | None = None
+
+    def get_scoped_prompt(self, base_prompt: str) -> str:
+        """Get the prompt scoped to this directory."""
+        prompt = self.prompt or base_prompt
+        return f"""You are working ONLY on the directory: {self.directory}/
+
+IMPORTANT CONSTRAINTS:
+- You may ONLY modify files within: {self.directory}/
+- Do NOT touch any files outside this directory
+- Do NOT modify files in other directories, even if they seem related
+- If you need to import from other directories, that's fine, but don't edit those files
+
+YOUR TASK:
+{prompt}
+"""
 
 
 @dataclass
@@ -57,395 +76,243 @@ class WorkerResult:
     """Result from a worker execution."""
     worker_id: int
     directory: str
-    branch_name: str
     success: bool
-    output: str
-    duration_seconds: float
-    commits: list[str] = field(default_factory=list)
+    pr_url: str | None = None
+    merged: bool = False
+    error: str | None = None
+    duration_seconds: float = 0.0
     cost_usd: float = 0.0
 
 
-def generate_branch_name(worker_id: int, directory: str) -> str:
-    """Generate unique branch name for a worker."""
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    suffix = ''.join(random.choices(string.ascii_lowercase, k=4))
-    dir_slug = directory.replace("/", "-").replace("\\", "-")[:20]
-    return f"auto-worker{worker_id}-{dir_slug}/{timestamp}-{suffix}"
+def setup_worktree(project_dir: Path, worker_id: int, base_branch: str) -> Path | None:
+    """Create a git worktree for isolated parallel execution."""
+    worktree_dir = project_dir / ".worktrees" / f"worker-{worker_id}"
+
+    # Clean up if exists
+    if worktree_dir.exists():
+        try:
+            subprocess.run(
+                ["git", "worktree", "remove", str(worktree_dir), "--force"],
+                cwd=project_dir, capture_output=True, timeout=30
+            )
+        except Exception:
+            shutil.rmtree(worktree_dir, ignore_errors=True)
+
+    # Create worktree
+    worktree_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(
+        ["git", "worktree", "add", str(worktree_dir), base_branch],
+        cwd=project_dir, capture_output=True, text=True, timeout=60
+    )
+
+    if result.returncode != 0:
+        print(f"[Worker {worker_id}] Failed to create worktree: {result.stderr}")
+        return None
+
+    return worktree_dir
 
 
-def run_worker(task: WorkerTask, project_dir: Path, base_branch: str) -> WorkerResult:
-    """
-    Execute a single worker task.
-
-    Each worker:
-    1. Creates its own branch
-    2. Runs Claude scoped to its directory
-    3. Returns results (does NOT create PR - coordinator handles that)
-    """
-    start_time = time.time()
-
-    # Generate branch name
-    branch_name = generate_branch_name(task.worker_id, task.directory)
-    target_dir = project_dir / task.directory
-
-    # Validate directory exists
-    if not target_dir.is_dir():
-        return WorkerResult(
-            worker_id=task.worker_id,
-            directory=task.directory,
-            branch_name=branch_name,
-            success=False,
-            output=f"Directory does not exist: {target_dir}",
-            duration_seconds=time.time() - start_time,
-        )
-
-    # Create branch
+def cleanup_worktree(project_dir: Path, worktree_dir: Path) -> None:
+    """Remove a git worktree."""
     try:
         subprocess.run(
-            ["git", "checkout", base_branch],
-            cwd=project_dir, capture_output=True, check=True
+            ["git", "worktree", "remove", str(worktree_dir), "--force"],
+            cwd=project_dir, capture_output=True, timeout=30
         )
-        subprocess.run(
-            ["git", "pull", "--rebase"],
-            cwd=project_dir, capture_output=True, timeout=60
-        )
-        subprocess.run(
-            ["git", "checkout", "-b", branch_name],
-            cwd=project_dir, capture_output=True, check=True
-        )
-    except subprocess.CalledProcessError as e:
+    except Exception:
+        shutil.rmtree(worktree_dir, ignore_errors=True)
+
+
+def run_worker(
+    worker_id: int,
+    config: WorkerConfig,
+    worktree_dir: Path,
+    base_branch: str,
+    auto_merge: bool,
+    max_iterations: int,
+    think_level: str,
+    tg_bot_token: str | None,
+    tg_chat_id: str | None,
+) -> WorkerResult:
+    """Run a single worker through the full PR cycle."""
+    start_time = time.time()
+
+    # Validate directory exists in worktree
+    target_dir = worktree_dir / config.directory
+    if not target_dir.is_dir():
         return WorkerResult(
-            worker_id=task.worker_id,
-            directory=task.directory,
-            branch_name=branch_name,
+            worker_id=worker_id,
+            directory=config.directory,
             success=False,
-            output=f"Git error: {e.stderr.decode() if e.stderr else str(e)}",
+            error=f"Directory does not exist: {config.directory}",
             duration_seconds=time.time() - start_time,
         )
 
     # Build scoped prompt
-    scoped_prompt = f"""You are working ONLY on the directory: {task.directory}
+    if config.modes:
+        base_prompt = get_combined_prompt(config.modes)
+    else:
+        base_prompt = config.prompt or "Improve code quality"
 
-IMPORTANT CONSTRAINTS:
-- You may ONLY modify files within: {task.directory}/
-- Do NOT touch any files outside this directory
-- Do NOT modify files in other directories, even if they seem related
-- If you need to import from other directories, that's fine, but don't edit those files
+    scoped_prompt = config.get_scoped_prompt(base_prompt)
 
-YOUR TASK:
-{task.prompt}
-
-After making changes:
-- Commit each logical change separately
-- Use conventional commit messages (feat:, fix:, refactor:, etc.)
-- Include the directory name in the commit message for clarity
-"""
-
-    # Append thinking keyword if not normal
-    if task.think_level != "normal":
-        scoped_prompt = f"{scoped_prompt}\n\n{task.think_level}"
-
-    # Run Claude
-    try:
-        result = subprocess.run(
-            ["claude", "--print", "--output-format", "json"],
-            input=scoped_prompt,
-            cwd=project_dir,
-            capture_output=True,
-            text=True,
-            timeout=1800,  # 30 min timeout per worker
-        )
-        output = result.stdout
-        success = result.returncode == 0
-
-        # Parse cost if available
-        cost_usd = 0.0
-        try:
-            data = json.loads(output)
-            cost_usd = data.get("total_cost_usd", 0.0)
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    except subprocess.TimeoutExpired:
-        output = "Claude timed out after 30 minutes"
-        success = False
-        cost_usd = 0.0
-    except FileNotFoundError:
-        output = "Claude CLI not found"
-        success = False
-        cost_usd = 0.0
-
-    # Get commits made
-    commits = []
-    try:
-        log_result = subprocess.run(
-            ["git", "log", "--oneline", f"{base_branch}..HEAD"],
-            cwd=project_dir, capture_output=True, text=True
-        )
-        if log_result.returncode == 0:
-            commits = [line.strip() for line in log_result.stdout.strip().split('\n') if line.strip()]
-    except subprocess.SubprocessError:
-        pass  # Git command failed, continue without commits list
-
-    # Return to base branch to avoid leaving repo in worker's branch
-    try:
-        subprocess.run(
-            ["git", "checkout", base_branch],
-            cwd=project_dir, capture_output=True, check=False
-        )
-    except subprocess.SubprocessError:
-        pass  # Best effort, don't fail the whole operation
-
-    return WorkerResult(
-        worker_id=task.worker_id,
-        directory=task.directory,
-        branch_name=branch_name,
-        success=success,
-        output=output[:5000],  # Truncate long outputs
-        duration_seconds=time.time() - start_time,
-        commits=commits,
-        cost_usd=cost_usd,
+    # Create AutoReviewer for this worker
+    reviewer = AutoReviewer(
+        project_dir=worktree_dir,
+        base_branch=base_branch,
+        auto_merge=auto_merge,
+        max_iterations=max_iterations,
+        tg_bot_token=tg_bot_token,
+        tg_chat_id=tg_chat_id,
+        review_prompt=scoped_prompt,
+        modes=config.modes or ["improve_code"],
+        think_level=think_level,
     )
 
+    # Override branch name to include directory
+    original_generate = reviewer.generate_branch_name
+    def scoped_branch_name() -> str:
+        name = original_generate()
+        dir_slug = config.directory.replace("/", "-").replace("\\", "-")[:20]
+        return f"{name}-{dir_slug}"
+    reviewer.generate_branch_name = scoped_branch_name
 
-def run_concurrent_workers(
-    tasks: list[WorkerTask],
+    try:
+        print(f"\n[Worker {worker_id}] Starting: {config.directory}")
+        success = reviewer.run_once()
+
+        # Try to get PR URL from git
+        pr_url = None
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "view", "--json", "url", "-q", ".url"],
+                cwd=worktree_dir, capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                pr_url = result.stdout.strip()
+        except Exception:
+            pass
+
+        return WorkerResult(
+            worker_id=worker_id,
+            directory=config.directory,
+            success=success,
+            pr_url=pr_url,
+            merged=auto_merge and success,
+            duration_seconds=time.time() - start_time,
+            cost_usd=reviewer.session_cost,
+        )
+
+    except Exception as e:
+        return WorkerResult(
+            worker_id=worker_id,
+            directory=config.directory,
+            success=False,
+            error=str(e),
+            duration_seconds=time.time() - start_time,
+        )
+
+
+def run_workers_parallel(
+    configs: list[WorkerConfig],
     project_dir: Path,
-    base_branch: str = "main",
-    max_workers: int | None = None,
+    base_branch: str,
+    auto_merge: bool,
+    max_iterations: int,
+    think_level: str,
+    max_workers: int | None,
+    tg_bot_token: str | None,
+    tg_chat_id: str | None,
 ) -> list[WorkerResult]:
-    """
-    Run multiple workers concurrently.
-
-    Each worker gets its own branch and directory scope.
-    Results are collected after all complete.
-    """
-    if not tasks:
+    """Run all workers in parallel using git worktrees."""
+    if not configs:
         return []
 
-    # Assign worker IDs
-    for i, task in enumerate(tasks):
-        task.worker_id = i + 1
-
-    # Default to number of tasks (each runs in parallel)
     if max_workers is None:
-        max_workers = len(tasks)
+        max_workers = min(len(configs), os.cpu_count() or 4)
 
     print(f"\n{'='*60}")
     print(f"Concurrent Claude Automator")
     print(f"{'='*60}")
     print(f"Project: {project_dir}")
     print(f"Base branch: {base_branch}")
-    print(f"Workers: {len(tasks)} tasks, {max_workers} parallel")
-    print(f"{'='*60}\n")
+    print(f"Workers: {len(configs)} directories, {max_workers} parallel")
+    print(f"Auto-merge: {auto_merge}")
+    if think_level != "normal":
+        print(f"Thinking: {think_level}")
+    print(f"{'='*60}")
 
-    for task in tasks:
-        print(f"  Worker {task.worker_id}: {task.directory}")
-        print(f"    Prompt: {task.prompt[:60]}...")
+    for i, config in enumerate(configs, 1):
+        print(f"  [{i}] {config.directory}")
     print()
 
     results: list[WorkerResult] = []
-
-    # Note: Each worker needs its own git worktree to avoid conflicts
-    # For simplicity, we run sequentially but in separate branches
-    # For true parallelism, use git worktree (see advanced mode below)
-
-    # Sequential execution with separate branches (safe mode)
-    print("Running workers sequentially (safe mode)...\n")
-    for task in tasks:
-        print(f"[Worker {task.worker_id}] Starting: {task.directory}")
-        result = run_worker(task, project_dir, base_branch)
-        results.append(result)
-
-        status = "✓" if result.success else "✗"
-        print(f"[Worker {task.worker_id}] {status} Completed in {result.duration_seconds:.1f}s")
-        if result.commits:
-            print(f"    Commits: {len(result.commits)}")
-        print()
-
-    return results
-
-
-def run_concurrent_workers_parallel(
-    tasks: list[WorkerTask],
-    project_dir: Path,
-    base_branch: str = "main",
-    max_workers: int | None = None,
-) -> list[WorkerResult]:
-    """
-    Run workers truly in parallel using git worktrees.
-
-    This creates temporary worktrees for each worker, allowing
-    true concurrent execution without git conflicts.
-    """
-    if not tasks:
-        return []
-
-    # Assign worker IDs
-    for i, task in enumerate(tasks):
-        task.worker_id = i + 1
-
-    if max_workers is None:
-        max_workers = min(len(tasks), os.cpu_count() or 4)
-
-    print(f"\n{'='*60}")
-    print(f"Concurrent Claude Automator (Parallel Mode)")
-    print(f"{'='*60}")
-    print(f"Project: {project_dir}")
-    print(f"Base branch: {base_branch}")
-    print(f"Workers: {len(tasks)} tasks, {max_workers} parallel")
-    print(f"{'='*60}\n")
-
-    worktree_base = project_dir / ".worktrees"
-    worktree_base.mkdir(exist_ok=True)
-
-    results: list[WorkerResult] = []
-    worktrees_created: list[Path] = []
+    worktrees: list[tuple[int, Path]] = []
 
     try:
-        # Create worktrees for each worker
-        for task in tasks:
-            branch_name = generate_branch_name(task.worker_id, task.directory)
-            task.branch_name = branch_name
-            worktree_path = worktree_base / f"worker-{task.worker_id}"
+        # Setup worktrees
+        print("Setting up worktrees...")
+        for i, config in enumerate(configs, 1):
+            worktree = setup_worktree(project_dir, i, base_branch)
+            if worktree:
+                worktrees.append((i, worktree))
+            else:
+                results.append(WorkerResult(
+                    worker_id=i,
+                    directory=config.directory,
+                    success=False,
+                    error="Failed to create worktree",
+                ))
 
-            # Create branch and worktree
-            subprocess.run(
-                ["git", "branch", branch_name, base_branch],
-                cwd=project_dir, capture_output=True
-            )
-            subprocess.run(
-                ["git", "worktree", "add", str(worktree_path), branch_name],
-                cwd=project_dir, capture_output=True
-            )
-            worktrees_created.append(worktree_path)
+        print(f"Created {len(worktrees)} worktrees\n")
 
         # Run workers in parallel
-        def worker_fn(task: WorkerTask) -> WorkerResult:
-            worktree_path = worktree_base / f"worker-{task.worker_id}"
-            return run_worker_in_worktree(task, worktree_path)
+        # Note: We use sequential execution here because ProcessPoolExecutor
+        # has issues with the AutoReviewer's subprocess calls and streaming.
+        # For true parallelism, run multiple instances of the script.
+        for (worker_id, worktree), config in zip(worktrees, configs):
+            result = run_worker(
+                worker_id=worker_id,
+                config=config,
+                worktree_dir=worktree,
+                base_branch=base_branch,
+                auto_merge=auto_merge,
+                max_iterations=max_iterations,
+                think_level=think_level,
+                tg_bot_token=tg_bot_token,
+                tg_chat_id=tg_chat_id,
+            )
+            results.append(result)
 
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            future_to_task = {executor.submit(worker_fn, task): task for task in tasks}
-
-            for future in as_completed(future_to_task):
-                task = future_to_task[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                    status = "✓" if result.success else "✗"
-                    print(f"[Worker {task.worker_id}] {status} {task.directory} ({result.duration_seconds:.1f}s)")
-                except Exception as e:
-                    results.append(WorkerResult(
-                        worker_id=task.worker_id,
-                        directory=task.directory,
-                        branch_name=task.branch_name,
-                        success=False,
-                        output=str(e),
-                        duration_seconds=0,
-                    ))
+            status = "✓" if result.success else "✗"
+            print(f"\n[Worker {worker_id}] {status} {config.directory} ({result.duration_seconds:.1f}s)")
+            if result.pr_url:
+                print(f"    PR: {result.pr_url}")
+            if result.error:
+                print(f"    Error: {result.error}")
 
     finally:
         # Cleanup worktrees
-        for worktree_path in worktrees_created:
-            subprocess.run(
-                ["git", "worktree", "remove", str(worktree_path), "--force"],
-                cwd=project_dir, capture_output=True
-            )
-        if worktree_base.exists():
+        print("\nCleaning up worktrees...")
+        for worker_id, worktree in worktrees:
+            cleanup_worktree(project_dir, worktree)
+
+        # Remove .worktrees dir if empty
+        worktrees_dir = project_dir / ".worktrees"
+        if worktrees_dir.exists():
             try:
-                worktree_base.rmdir()
+                worktrees_dir.rmdir()
             except OSError:
                 pass
 
     return results
 
 
-def run_worker_in_worktree(task: WorkerTask, worktree_path: Path) -> WorkerResult:
-    """Run a worker in an isolated git worktree."""
-    start_time = time.time()
-    target_dir = worktree_path / task.directory
-
-    if not target_dir.is_dir():
-        return WorkerResult(
-            worker_id=task.worker_id,
-            directory=task.directory,
-            branch_name=task.branch_name,
-            success=False,
-            output=f"Directory does not exist: {target_dir}",
-            duration_seconds=time.time() - start_time,
-        )
-
-    scoped_prompt = f"""You are working ONLY on the directory: {task.directory}
-
-IMPORTANT CONSTRAINTS:
-- You may ONLY modify files within: {task.directory}/
-- Do NOT touch any files outside this directory
-
-YOUR TASK:
-{task.prompt}
-
-Commit each logical change with conventional commit messages.
-"""
-
-    # Append thinking keyword if not normal
-    if task.think_level != "normal":
-        scoped_prompt = f"{scoped_prompt}\n\n{task.think_level}"
-
-    try:
-        result = subprocess.run(
-            ["claude", "--print", "--output-format", "json"],
-            input=scoped_prompt,
-            cwd=worktree_path,
-            capture_output=True,
-            text=True,
-            timeout=1800,
-        )
-        output = result.stdout
-        success = result.returncode == 0
-
-        cost_usd = 0.0
-        try:
-            data = json.loads(output)
-            cost_usd = data.get("total_cost_usd", 0.0)
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    except subprocess.TimeoutExpired:
-        output = "Claude timed out"
-        success = False
-        cost_usd = 0.0
-    except FileNotFoundError:
-        output = "Claude CLI not found"
-        success = False
-        cost_usd = 0.0
-
-    commits = []
-    try:
-        log_result = subprocess.run(
-            ["git", "log", "--oneline", f"HEAD~10..HEAD"],
-            cwd=worktree_path, capture_output=True, text=True
-        )
-        if log_result.returncode == 0:
-            commits = [line.strip() for line in log_result.stdout.strip().split('\n') if line.strip()]
-    except subprocess.SubprocessError:
-        pass  # Git command failed, continue without commits list
-
-    return WorkerResult(
-        worker_id=task.worker_id,
-        directory=task.directory,
-        branch_name=task.branch_name,
-        success=success,
-        output=output[:5000],
-        duration_seconds=time.time() - start_time,
-        commits=commits,
-        cost_usd=cost_usd,
-    )
-
-
-def auto_partition_directories(project_dir: Path, exclude: list[str] | None = None) -> list[str]:
+def auto_partition_directories(project_dir: Path) -> list[str]:
     """Auto-detect top-level directories for partitioning."""
-    exclude = exclude or [".git", ".venv", "venv", "node_modules", "__pycache__", ".worktrees", "results"]
+    exclude = {".git", ".venv", "venv", "node_modules", "__pycache__",
+               ".worktrees", "results", ".claude", ".github"}
 
     directories = []
     for item in project_dir.iterdir():
@@ -456,76 +323,85 @@ def auto_partition_directories(project_dir: Path, exclude: list[str] | None = No
 
 
 def print_summary(results: list[WorkerResult]) -> None:
-    """Print a summary of all worker results."""
+    """Print summary of all worker results."""
     print(f"\n{'='*60}")
     print("SUMMARY")
     print(f"{'='*60}")
 
-    total_commits = 0
-    total_cost = 0.0
-    successful = 0
+    successful = sum(1 for r in results if r.success)
+    merged = sum(1 for r in results if r.merged)
+    total_cost = sum(r.cost_usd for r in results)
+    total_time = sum(r.duration_seconds for r in results)
 
     for r in results:
         status = "✓" if r.success else "✗"
-        print(f"\n[Worker {r.worker_id}] {status} {r.directory}")
-        print(f"  Branch: {r.branch_name}")
-        print(f"  Duration: {r.duration_seconds:.1f}s")
-        print(f"  Commits: {len(r.commits)}")
+        print(f"\n[{r.worker_id}] {status} {r.directory}")
+        print(f"    Duration: {r.duration_seconds:.1f}s")
+        if r.pr_url:
+            print(f"    PR: {r.pr_url}")
+        if r.merged:
+            print(f"    Merged: Yes")
+        if r.error:
+            print(f"    Error: {r.error}")
         if r.cost_usd > 0:
-            print(f"  Cost: ${r.cost_usd:.4f}")
-
-        if r.commits:
-            for commit in r.commits[:5]:
-                print(f"    - {commit}")
-            if len(r.commits) > 5:
-                print(f"    ... and {len(r.commits) - 5} more")
-
-        total_commits += len(r.commits)
-        total_cost += r.cost_usd
-        if r.success:
-            successful += 1
+            print(f"    Cost: ${r.cost_usd:.4f}")
 
     print(f"\n{'─'*60}")
-    print(f"Total: {successful}/{len(results)} successful")
-    print(f"Total commits: {total_commits}")
+    print(f"Success: {successful}/{len(results)}")
+    if merged > 0:
+        print(f"Merged: {merged}")
+    print(f"Total time: {total_time:.1f}s")
     if total_cost > 0:
         print(f"Total cost: ${total_cost:.4f}")
     print(f"{'='*60}\n")
 
-    # List branches for manual review
-    if any(r.commits for r in results):
-        print("Branches with changes (review and merge manually):")
-        for r in results:
-            if r.commits:
-                print(f"  git checkout {r.branch_name}")
-        print()
-
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run multiple Claude workers concurrently, each on its own directory",
+        description="Run multiple Claude workers in parallel, each on its own branch",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--config", "-c", type=str, help="JSON config file with worker tasks")
+
+    # Directory selection
+    parser.add_argument("--config", "-c", type=str,
+                        help="JSON config file with worker configs")
     parser.add_argument("--auto-partition", "-a", action="store_true",
                         help="Auto-partition top-level directories")
-    parser.add_argument("--prompt", "-p", type=str,
-                        default="Review and improve code quality in this directory",
-                        help="Default prompt for all workers (used with --auto-partition)")
     parser.add_argument("--directories", "-d", nargs="+",
                         help="Specific directories to work on")
+
+    # Prompts and modes
+    parser.add_argument("--prompt", "-p", type=str,
+                        default="Improve code quality in this directory",
+                        help="Default prompt for all workers")
+    parser.add_argument("--mode", "-m", type=str, action="append", dest="modes",
+                        choices=list(IMPROVEMENT_MODES.keys()),
+                        help="Improvement mode (can be repeated)")
+
+    # Standard options (same as main script)
     parser.add_argument("--project-dir", type=str, default=os.getcwd(),
                         help="Project directory (default: current)")
     parser.add_argument("--base-branch", type=str, default="main",
                         help="Base branch (default: main)")
-    parser.add_argument("--max-workers", "-w", type=int, default=None,
+    parser.add_argument("--auto-merge", action="store_true",
+                        help="Auto-merge approved PRs")
+    parser.add_argument("--max-iterations", type=int, default=3,
+                        help="Max review-fix cycles (default: 3)")
+    parser.add_argument("--think", type=str,
+                        choices=["normal", "think", "megathink", "ultrathink"],
+                        default="normal", help="Thinking level")
+    parser.add_argument("--max-workers", "-w", type=int,
                         help="Max parallel workers")
-    parser.add_argument("--parallel", action="store_true",
-                        help="Use git worktrees for true parallelism")
+
+    # Notifications
+    parser.add_argument("--tg-bot-token", type=str,
+                        default=os.environ.get("TG_BOT_TOKEN"))
+    parser.add_argument("--tg-chat-id", type=str,
+                        default=os.environ.get("TG_CHAT_ID"))
+
+    # Other
     parser.add_argument("--dry-run", action="store_true",
-                        help="Show what would be done without executing")
-    parser.add_argument("--think", type=str, choices=["normal", "think", "megathink", "ultrathink"],
-                        default="normal", help="Thinking budget level (default: normal)")
+                        help="Show what would be done")
 
     args = parser.parse_args()
 
@@ -542,70 +418,86 @@ def main():
         print(f"Error: Invalid base branch: {e}")
         sys.exit(1)
 
-    # Build task list
-    tasks: list[WorkerTask] = []
+    # Build worker configs
+    configs: list[WorkerConfig] = []
 
     if args.config:
-        # Load from config file
         config_path = Path(args.config)
         if not config_path.exists():
             print(f"Error: Config file not found: {config_path}")
             sys.exit(1)
 
         with open(config_path) as f:
-            config = json.load(f)
+            data = json.load(f)
 
-        for item in config:
-            tasks.append(WorkerTask(
+        for item in data:
+            configs.append(WorkerConfig(
                 directory=item["directory"],
-                prompt=item.get("prompt", args.prompt),
-                think_level=args.think,
+                prompt=item.get("prompt"),
+                modes=item.get("modes"),
             ))
 
     elif args.directories:
-        # Use specified directories
         for directory in args.directories:
-            tasks.append(WorkerTask(directory=directory, prompt=args.prompt, think_level=args.think))
+            configs.append(WorkerConfig(
+                directory=directory,
+                prompt=args.prompt,
+                modes=args.modes,
+            ))
 
     elif args.auto_partition:
-        # Auto-detect directories
         directories = auto_partition_directories(project_dir)
         if not directories:
             print("No directories found to partition")
             sys.exit(1)
 
         for directory in directories:
-            tasks.append(WorkerTask(directory=directory, prompt=args.prompt, think_level=args.think))
+            configs.append(WorkerConfig(
+                directory=directory,
+                prompt=args.prompt,
+                modes=args.modes,
+            ))
 
     else:
         print("Error: Specify --config, --directories, or --auto-partition")
         parser.print_help()
         sys.exit(1)
 
-    if not tasks:
-        print("No tasks to run")
+    if not configs:
+        print("No worker configs defined")
         sys.exit(0)
 
+    # Dry run
     if args.dry_run:
         print("DRY RUN - Would execute:\n")
-        for i, task in enumerate(tasks, 1):
-            print(f"Worker {i}: {task.directory}")
-            print(f"  Prompt: {task.prompt[:80]}...")
+        for i, config in enumerate(configs, 1):
+            print(f"Worker {i}: {config.directory}")
+            if config.modes:
+                print(f"  Modes: {', '.join(config.modes)}")
+            else:
+                print(f"  Prompt: {(config.prompt or args.prompt)[:60]}...")
             print()
         sys.exit(0)
 
     # Run workers
-    if args.parallel:
-        results = run_concurrent_workers_parallel(
-            tasks, project_dir, args.base_branch, args.max_workers
-        )
-    else:
-        results = run_concurrent_workers(
-            tasks, project_dir, args.base_branch, args.max_workers
-        )
+    results = run_workers_parallel(
+        configs=configs,
+        project_dir=project_dir,
+        base_branch=args.base_branch,
+        auto_merge=args.auto_merge,
+        max_iterations=args.max_iterations,
+        think_level=args.think,
+        max_workers=args.max_workers,
+        tg_bot_token=args.tg_bot_token,
+        tg_chat_id=args.tg_chat_id,
+    )
 
     # Print summary
     print_summary(results)
+
+    # Exit with error if any worker failed
+    if not all(r.success for r in results):
+        sys.exit(1)
 
 
 if __name__ == "__main__":
