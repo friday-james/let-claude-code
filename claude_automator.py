@@ -962,9 +962,13 @@ class AutoReviewer:
                     text=True,
                 )
 
-                # Send prompt via stdin
-                process.stdin.write(prompt)
-                process.stdin.close()
+                # Send prompt via stdin with error handling
+                try:
+                    process.stdin.write(prompt)
+                    process.stdin.close()
+                except BrokenPipeError:
+                    process.kill()
+                    return False, "Claude process terminated unexpectedly during prompt input"
 
                 result_data = {}
                 start_time = time.time()
@@ -1003,6 +1007,9 @@ class AutoReviewer:
                         # Not JSON, print as-is
                         print(line, flush=True)
 
+                # Ensure process completed and check return code
+                if process.returncode is None:
+                    process.wait(timeout=5)  # Give it a moment to finish
                 success = process.returncode == 0
 
                 # Print usage summary from result
