@@ -613,6 +613,20 @@ class TestAutoReviewer(unittest.TestCase):
         self.assertIn("timed out", output)
         mock_process.kill.assert_called_once()
 
+    @patch('subprocess.Popen')
+    def test_run_claude_broken_pipe(self, mock_popen):
+        """Should handle BrokenPipeError when Claude terminates during input."""
+        mock_process = MagicMock()
+        mock_process.stdin.write.side_effect = BrokenPipeError()
+        mock_process.kill = MagicMock()
+        mock_popen.return_value = mock_process
+
+        success, output = self.reviewer.run_claude("test prompt")
+
+        self.assertFalse(success)
+        self.assertIn("terminated unexpectedly", output)
+        mock_process.kill.assert_called_once()
+
     @patch.object(AutoReviewer, 'run_cmd')
     def test_has_commits_ahead_true(self, mock_run_cmd):
         """Should detect commits ahead of base branch."""
