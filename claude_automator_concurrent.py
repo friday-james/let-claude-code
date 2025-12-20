@@ -37,7 +37,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+
+# Import validators from main module
+from claude_automator import validate_path, validate_branch_name
 
 
 @dataclass
@@ -47,6 +49,7 @@ class WorkerTask:
     prompt: str
     worker_id: int = 0
     branch_name: str = ""
+    think_level: str = "normal"  # Thinking budget: normal, think, megathink, ultrathink
 
 
 @dataclass
@@ -138,6 +141,10 @@ After making changes:
 - Include the directory name in the commit message for clarity
 """
 
+    # Append thinking keyword if not normal
+    if task.think_level != "normal":
+        scoped_prompt = f"{scoped_prompt}\n\n{task.think_level}"
+
     # Run Claude
     try:
         result = subprocess.run(
@@ -177,8 +184,17 @@ After making changes:
         )
         if log_result.returncode == 0:
             commits = [line.strip() for line in log_result.stdout.strip().split('\n') if line.strip()]
-    except Exception:
-        pass
+    except subprocess.SubprocessError:
+        pass  # Git command failed, continue without commits list
+
+    # Return to base branch to avoid leaving repo in worker's branch
+    try:
+        subprocess.run(
+            ["git", "checkout", base_branch],
+            cwd=project_dir, capture_output=True, check=False
+        )
+    except subprocess.SubprocessError:
+        pass  # Best effort, don't fail the whole operation
 
     return WorkerResult(
         worker_id=task.worker_id,
@@ -372,6 +388,10 @@ YOUR TASK:
 Commit each logical change with conventional commit messages.
 """
 
+    # Append thinking keyword if not normal
+    if task.think_level != "normal":
+        scoped_prompt = f"{scoped_prompt}\n\n{task.think_level}"
+
     try:
         result = subprocess.run(
             ["claude", "--print", "--output-format", "json"],
@@ -408,8 +428,8 @@ Commit each logical change with conventional commit messages.
         )
         if log_result.returncode == 0:
             commits = [line.strip() for line in log_result.stdout.strip().split('\n') if line.strip()]
-    except Exception:
-        pass
+    except subprocess.SubprocessError:
+        pass  # Git command failed, continue without commits list
 
     return WorkerResult(
         worker_id=task.worker_id,
@@ -504,9 +524,23 @@ def main():
                         help="Use git worktrees for true parallelism")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would be done without executing")
+    parser.add_argument("--think", type=str, choices=["normal", "think", "megathink", "ultrathink"],
+                        default="normal", help="Thinking budget level (default: normal)")
 
     args = parser.parse_args()
-    project_dir = Path(args.project_dir).resolve()
+
+    # Validate inputs
+    try:
+        project_dir = validate_path(args.project_dir, must_exist=True, must_be_dir=True)
+    except ValueError as e:
+        print(f"Error: Invalid project directory: {e}")
+        sys.exit(1)
+
+    try:
+        validate_branch_name(args.base_branch)
+    except ValueError as e:
+        print(f"Error: Invalid base branch: {e}")
+        sys.exit(1)
 
     # Build task list
     tasks: list[WorkerTask] = []
@@ -525,12 +559,13 @@ def main():
             tasks.append(WorkerTask(
                 directory=item["directory"],
                 prompt=item.get("prompt", args.prompt),
+                think_level=args.think,
             ))
 
     elif args.directories:
         # Use specified directories
         for directory in args.directories:
-            tasks.append(WorkerTask(directory=directory, prompt=args.prompt))
+            tasks.append(WorkerTask(directory=directory, prompt=args.prompt, think_level=args.think))
 
     elif args.auto_partition:
         # Auto-detect directories
@@ -540,7 +575,7 @@ def main():
             sys.exit(1)
 
         for directory in directories:
-            tasks.append(WorkerTask(directory=directory, prompt=args.prompt))
+            tasks.append(WorkerTask(directory=directory, prompt=args.prompt, think_level=args.think))
 
     else:
         print("Error: Specify --config, --directories, or --auto-partition")
