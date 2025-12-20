@@ -1039,6 +1039,17 @@ class AutoReviewer:
             return False
 
     def create_pull_request(self, summary: str) -> str | None:
+        """Create a pull request for the current branch.
+
+        Pushes the current branch to origin and creates a PR with a generated
+        title and body containing the improvement mode and summary.
+
+        Args:
+            summary: A summary of the changes made, included in the PR body.
+
+        Returns:
+            The PR URL if created successfully, None otherwise.
+        """
         if not self.has_commits_ahead():
             return None
         success, _ = self.run_cmd(["git", "push", "-u", "origin", self.current_branch], timeout=120)
@@ -1060,6 +1071,16 @@ class AutoReviewer:
         return None
 
     def review_pr_with_claude(self, pr_url: str) -> tuple[bool, str, str]:
+        """Have Claude review a pull request.
+
+        Args:
+            pr_url: The GitHub URL of the pull request to review.
+
+        Returns:
+            A tuple of (approved, output, feedback) where approved is True if
+            the PR was approved, output is Claude's full response, and feedback
+            contains the review comments or last 20 lines of output.
+        """
         pr_number = pr_url.rstrip('/').split('/')[-1]
         success, output = self.run_claude(get_pr_review_prompt(pr_number), timeout=600)
         output_lower = output.lower()
@@ -1069,20 +1090,52 @@ class AutoReviewer:
         return approved, output, feedback
 
     def fix_pr_feedback(self, pr_url: str, feedback: str, iteration: int) -> tuple[bool, str]:
+        """Have Claude fix issues identified in PR review feedback.
+
+        Args:
+            pr_url: The GitHub URL of the pull request.
+            feedback: The reviewer feedback describing issues to fix.
+            iteration: The current review-fix iteration number.
+
+        Returns:
+            A tuple of (success, output) from running Claude.
+        """
         pr_number = pr_url.rstrip('/').split('/')[-1]
         return self.run_claude(get_fix_feedback_prompt(pr_number, feedback), timeout=1200)
 
     def merge_pr(self, pr_url: str) -> bool:
+        """Merge an approved pull request using squash merge.
+
+        Args:
+            pr_url: The GitHub URL of the pull request to merge.
+
+        Returns:
+            True if the merge was successful, False otherwise.
+        """
         pr_number = pr_url.rstrip('/').split('/')[-1]
         success, _ = self.run_cmd(["gh", "pr", "merge", pr_number, "--squash", "--delete-branch"], timeout=60)
         return success
 
-    def cleanup_branch(self):
+    def cleanup_branch(self) -> None:
+        """Clean up by switching back to the base branch.
+
+        Resets the current_branch tracking variable after checkout.
+        """
         if self.current_branch:
             self.run_cmd(["git", "checkout", self.base_branch])
             self.current_branch = None
 
     def run_once(self) -> bool:
+        """Execute a single review cycle.
+
+        Creates a feature branch, runs Claude with the configured prompt,
+        creates a PR if changes were made, reviews the PR, fixes any issues,
+        and optionally auto-merges on approval.
+
+        Returns:
+            True if the cycle completed successfully (even if no changes),
+            False if the cycle failed or was skipped due to lock.
+        """
         if not self.lock_file.acquire():
             self.log("Another review is already running, skipping")
             return False
@@ -1150,7 +1203,15 @@ class AutoReviewer:
 # SCHEDULING
 # ============================================================================
 
-def run_loop(reviewer: AutoReviewer):
+def run_loop(reviewer: AutoReviewer) -> None:
+    """Run the reviewer continuously without delay between runs.
+
+    Executes review cycles back-to-back, starting the next run immediately
+    after the previous one completes. Runs indefinitely until interrupted.
+
+    Args:
+        reviewer: The AutoReviewer instance to run.
+    """
     print("Running continuously. Press Ctrl+C to stop.")
     run_count = 0
     while True:
