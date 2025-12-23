@@ -22,6 +22,9 @@ wget -qO- https://raw.githubusercontent.com/friday-james/let-claude-code/main/in
 
 # For cron support
 pip install "let-claude-code[cron] @ git+https://github.com/friday-james/let-claude-code.git"
+
+# Update to latest
+pip install --upgrade git+https://github.com/friday-james/let-claude-code.git
 ```
 
 This installs the `cook` command.
