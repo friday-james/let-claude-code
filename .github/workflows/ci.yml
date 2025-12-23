@@ -21,13 +21,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
+      - name: Install package
         run: |
           python -m pip install --upgrade pip
-          pip install pytest
+          pip install -e ".[dev]"
 
       - name: Check syntax
-        run: python -m py_compile claude_automator.py
+        run: python -m py_compile src/let_claude_code/automator.py src/let_claude_code/concurrent.py
 
       - name: Run tests
         run: python -m pytest test_claude_automator.py -v
@@ -46,7 +46,7 @@ jobs:
         run: pip install ruff
 
       - name: Run ruff check
-        run: ruff check claude_automator.py test_claude_automator.py
+        run: ruff check src/let_claude_code/ test_claude_automator.py
 
       - name: Run ruff format check
-        run: ruff format --check claude_automator.py test_claude_automator.py
+        run: ruff format --check src/let_claude_code/ test_claude_automator.py
