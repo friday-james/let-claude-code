@@ -5,10 +5,10 @@ Claude Automator - Automatically improve your codebase with Claude Code.
 Zero dependencies beyond Python 3.10+ stdlib. Just download and run.
 
 Usage:
-    ./claude_automator.py --once -m improve_code    # Improve code quality
-    ./claude_automator.py --once --northstar        # Iterate towards NORTHSTAR.md goals
-    ./claude_automator.py --once --llm codex -m fix_bugs  # Run with Codex CLI
-    ./claude_automator.py --list-modes              # Show available modes
+    cook --once -m improve_code    # Improve code quality
+    cook --once --northstar        # Iterate towards NORTHSTAR.md goals
+    cook --yolo                    # YOLO mode: loop + create PR + auto-merge
+    cook --list-modes              # Show available modes
 """
 
 from __future__ import annotations
@@ -834,7 +834,7 @@ class TelegramNotifier:
 
 
 class AutoReviewer:
-    """Orchestrates automated code review cycles using Claude or Codex.
+    """Orchestrates automated code review cycles using Claude.
 
     Workflow:
     1. Creates a feature branch from base_branch
@@ -857,7 +857,6 @@ class AutoReviewer:
         review_prompt: str | None = None,
         modes: list[str] | None = None,
         think_level: str = "normal",
-        llm_provider: str = "claude",
         create_pr: bool = False,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
@@ -873,7 +872,6 @@ class AutoReviewer:
         self.session_cost = 0.0  # Cumulative cost across all runs
         self.session_id: str | None = None  # For continuing sessions
         self.think_level = think_level  # Thinking budget: normal, think, megathink, ultrathink
-        self.llm_provider = llm_provider  # LLM CLI provider: claude or codex
         self.create_pr = create_pr  # If True, create PR with review cycle
 
     def get_mode_names(self) -> str:
@@ -910,91 +908,8 @@ class AutoReviewer:
         except OSError as e:
             return False, f"Failed to run {cmd[0]}: {e}"
 
-    def run_codex(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
-        """Run Codex CLI with the given prompt, streaming output in real-time."""
-        import pty
-        import select
-
-        # Append thinking keyword if not normal
-        if self.think_level != "normal":
-            prompt = f"{prompt}\n\n{self.think_level}"
-
-        try:
-            # Create pseudo-terminal so codex thinks it has a TTY
-            master_fd, slave_fd = pty.openpty()
-
-            process = subprocess.Popen(
-                ["codex"],
-                cwd=self.project_dir,
-                stdin=slave_fd,
-                stdout=slave_fd,
-                stderr=slave_fd,
-            )
-
-            os.close(slave_fd)
-
-            # Send prompt
-            os.write(master_fd, (prompt + "\n").encode())
-
-            start_time = time.time()
-            output_lines = []
-
-            while True:
-                if time.time() - start_time > timeout:
-                    process.kill()
-                    os.close(master_fd)
-                    return False, "Codex timed out"
-
-                # Check if there's data to read
-                ready, _, _ = select.select([master_fd], [], [], 0.1)
-                if ready:
-                    try:
-                        data = os.read(master_fd, 1024)
-                        if data:
-                            text = data.decode('utf-8', errors='replace')
-                            print(text, end="", flush=True)
-                            output_lines.append(text)
-                    except OSError:
-                        break
-
-                if process.poll() is not None:
-                    # Read any remaining output
-                    try:
-                        while True:
-                            ready, _, _ = select.select([master_fd], [], [], 0.1)
-                            if not ready:
-                                break
-                            data = os.read(master_fd, 1024)
-                            if not data:
-                                break
-                            text = data.decode('utf-8', errors='replace')
-                            print(text, end="", flush=True)
-                            output_lines.append(text)
-                    except OSError:
-                        pass
-                    break
-
-            os.close(master_fd)
-            success = process.returncode == 0
-
-            if success:
-                _, log_output = self.run_cmd(["git", "log", "--oneline", f"{self.base_branch}..HEAD"])
-                summary = f"Changes made:\n{log_output}" if log_output.strip() else "Codex completed"
-            else:
-                summary = "Codex failed"
-
-            return success, summary
-
-        except FileNotFoundError:
-            return False, "Codex CLI not found"
-        except OSError as e:
-            return False, f"Failed to run Codex: {e}"
-
     def run_claude(self, prompt: str, timeout: int = 3600) -> tuple[bool, str]:
         """Run Claude CLI with the given prompt, streaming output in real-time with usage stats."""
-        if self.llm_provider == "codex":
-            return self.run_codex(prompt, timeout=timeout)
-
         import atexit
         import tempfile
         import json
@@ -1356,14 +1271,21 @@ def main():
     parser.add_argument("--prompt-file", type=str, help="Custom prompt file")
     parser.add_argument("--think", type=str, choices=["normal", "think", "megathink", "ultrathink"],
                         default="normal", help="Thinking budget level (default: normal)")
-    parser.add_argument("--llm", type=str, choices=["claude", "codex"], default="claude",
-                        help="LLM CLI to use (default: claude)")
     parser.add_argument("--create-pr", nargs="?", const="main", metavar="BRANCH",
                         help="Create PR targeting BRANCH (default: main)")
     parser.add_argument("-y", "--yes", action="store_true",
                         help="Skip confirmation prompt")
+    parser.add_argument("--yolo", action="store_true",
+                        help="YOLO mode: --loop --create-pr --auto-merge -y combined")
 
     args = parser.parse_args()
+
+    # YOLO mode sets all the aggressive flags
+    if args.yolo:
+        args.loop = True
+        args.create_pr = args.create_pr or "main"
+        args.auto_merge = True
+        args.yes = True
 
     if args.list_modes:
         print(get_mode_list())
@@ -1477,7 +1399,6 @@ def main():
     print("=" * 60)
     print(f"Project: {project_path}")
     print(f"Branch: {current_branch}")
-    print(f"LLM: {args.llm}")
     if "northstar" in selected_modes:
         print("Mode: North Star")
     else:
@@ -1498,7 +1419,6 @@ def main():
         review_prompt=review_prompt,
         modes=selected_modes,
         think_level=args.think,
-        llm_provider=args.llm,
         create_pr=bool(args.create_pr),
     )
 
