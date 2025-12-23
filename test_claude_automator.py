@@ -24,7 +24,6 @@ from claude_automator import (
     load_northstar_prompt,
     create_default_northstar,
     IMPROVEMENT_MODES,
-    NORTHSTAR_TEMPLATE,
     LockFile,
     TelegramNotifier,
     AutoReviewer,

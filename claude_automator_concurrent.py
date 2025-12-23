@@ -136,6 +136,7 @@ def run_worker(
     llm_provider: str,
     tg_bot_token: str | None,
     tg_chat_id: str | None,
+    no_pr: bool = False,
 ) -> WorkerResult:
     """Run a single worker through the full PR cycle."""
     start_time = time.time()
@@ -171,6 +172,7 @@ def run_worker(
         modes=config.modes or ["improve_code"],
         think_level=think_level,
         llm_provider=llm_provider,
+        no_pr=no_pr,
     )
 
     # Override branch name to include directory
@@ -228,6 +230,7 @@ def run_workers_parallel(
     max_workers: int | None,
     tg_bot_token: str | None,
     tg_chat_id: str | None,
+    no_pr: bool = False,
 ) -> list[WorkerResult]:
     """Run all workers in parallel using git worktrees."""
     if not configs:
@@ -246,6 +249,8 @@ def run_workers_parallel(
     print(f"LLM: {llm_provider}")
     if think_level != "normal":
         print(f"Thinking: {think_level}")
+    if no_pr:
+        print("PR: Disabled (commit only)")
     print(f"{'='*60}")
 
     for i, config in enumerate(configs, 1):
@@ -288,6 +293,7 @@ def run_workers_parallel(
                 llm_provider=llm_provider,
                 tg_bot_token=tg_bot_token,
                 tg_chat_id=tg_chat_id,
+                no_pr=no_pr,
             )
             results.append(result)
 
@@ -400,6 +406,8 @@ def main():
                         help="LLM CLI to use (default: claude)")
     parser.add_argument("--codex", action="store_true",
                         help="Use Codex CLI (shorthand for --llm codex)")
+    parser.add_argument("--no-pr", action="store_true",
+                        help="Just commit on current branch, don't create PR")
     parser.add_argument("--max-workers", "-w", type=int,
                         help="Max parallel workers")
 
@@ -504,6 +512,7 @@ def main():
         max_workers=args.max_workers,
         tg_bot_token=args.tg_bot_token,
         tg_chat_id=args.tg_chat_id,
+        no_pr=args.no_pr,
     )
 
     # Print summary

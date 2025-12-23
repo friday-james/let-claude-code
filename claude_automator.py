@@ -716,8 +716,8 @@ def select_modes_interactive() -> list[str]:
         mode = IMPROVEMENT_MODES[key]
         print(f"  [{i:2}] {mode['name']:25} - {mode['description']}")
 
-    print(f"\n  [ 0] All modes")
-    print(f"  [ q] Quit")
+    print("\n  [ 0] All modes")
+    print("  [ q] Quit")
     print("\nEnter mode numbers separated by space (e.g., '1 3 5'), or '0' for all:")
 
     try:
@@ -858,6 +858,7 @@ class AutoReviewer:
         modes: list[str] | None = None,
         think_level: str = "normal",
         llm_provider: str = "claude",
+        no_pr: bool = False,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
         self.auto_merge = auto_merge
@@ -873,6 +874,7 @@ class AutoReviewer:
         self.session_id: str | None = None  # For continuing sessions
         self.think_level = think_level  # Thinking budget: normal, think, megathink, ultrathink
         self.llm_provider = llm_provider  # LLM CLI provider: claude or codex
+        self.no_pr = no_pr  # If True, just commit on current branch without creating PR
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -1109,7 +1111,7 @@ class AutoReviewer:
                         print(f"💾 Cache: read {cache_read:,}, created {cache_create:,}")
                     print(f"💰 This run: ${run_cost:.4f} | Session total: ${self.session_cost:.4f}")
                     print(f"⏱️  Time: {duration:.1f}s")
-                    print(f"💡 Check quota: run 'claude' then type '/usage'")
+                    print("💡 Check quota: run 'claude' then type '/usage'")
                     print(f"{'─'*60}\n")
 
                 # Get summary from git log
@@ -1209,6 +1211,27 @@ class AutoReviewer:
             self.log("=" * 60)
             self.log("Starting review cycle")
 
+            # In no_pr mode, just run on the current branch without creating a new one
+            if self.no_pr:
+                self.log("Running in no-PR mode (commits only)...")
+                success, summary = self.run_claude(self.review_prompt, timeout=3600)
+                if not success:
+                    self.telegram.send("⚠️ *Auto-Review Failed*\n\nClaude failed.")
+                    return False
+
+                # Check what commits were made
+                _, log_output = self.run_cmd(["git", "log", "--oneline", "-10"])
+                if log_output.strip():
+                    self.log(f"Recent commits:\n{log_output}")
+                    self.telegram.send("✅ *Auto-Review Complete*\n\nCommits made on current branch.")
+                else:
+                    self.log("No changes made")
+                    self.telegram.send("✅ *Auto-Review Complete*\n\nNo changes needed.")
+
+                self.log("Review cycle complete")
+                self.log("=" * 60)
+                return True
+
             branch_name = self.generate_branch_name()
             if not self.create_branch(branch_name):
                 self.telegram.send("⚠️ *Auto-Review Failed*\n\nCould not create branch.")
@@ -1247,7 +1270,7 @@ class AutoReviewer:
                         self.telegram.send(f"✅ *Auto-Review: PR Ready*\n🔗 {pr_url}")
                     break
 
-                self.log(f"Changes requested, fixing...")
+                self.log("Changes requested, fixing...")
                 self.telegram.send(f"🔄 Fixing feedback (iteration {iteration})")
                 fix_success, _ = self.fix_pr_feedback(pr_url, feedback, iteration)
                 if not fix_success:
@@ -1336,6 +1359,8 @@ def main():
                         help="LLM CLI to use (default: claude)")
     parser.add_argument("--codex", action="store_true",
                         help="Use Codex CLI (shorthand for --llm codex)")
+    parser.add_argument("--no-pr", action="store_true",
+                        help="Just commit on current branch, don't create PR")
 
     args = parser.parse_args()
 
@@ -1407,7 +1432,7 @@ def main():
         if northstar_path.exists():
             prompt, error = load_northstar_prompt(project_path)
             if not error:
-                print(f"Found NORTHSTAR.md, using North Star mode")
+                print("Found NORTHSTAR.md, using North Star mode")
                 review_prompt = prompt
                 selected_modes = ["northstar"]
             else:
@@ -1431,6 +1456,8 @@ def main():
         print(f"Modes: {', '.join(IMPROVEMENT_MODES[m]['name'] for m in selected_modes if m in IMPROVEMENT_MODES)}")
     if args.think != "normal":
         print(f"Thinking: {args.think}")
+    if args.no_pr:
+        print("PR: Disabled (commit only)")
     print("=" * 60 + "\n")
 
     reviewer = AutoReviewer(
@@ -1444,6 +1471,7 @@ def main():
         modes=selected_modes,
         think_level=args.think,
         llm_provider=args.llm,
+        no_pr=args.no_pr,
     )
 
     if args.once:

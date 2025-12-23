@@ -196,6 +196,9 @@ A high-quality, well-maintained codebase that is secure, performant, and easy to
 # Auto-merge when approved (living dangerously)
 ./claude_automator.py --loop --auto-merge
 
+# Just commit on current branch, no PR (for feature branches)
+./claude_automator.py --once -m improve_code --no-pr
+
 # Get Telegram notifications
 export TG_BOT_TOKEN="your_token"
 export TG_CHAT_ID="your_chat_id"
@@ -241,6 +244,7 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 | `--think LEVEL` | Thinking budget: `normal`, `think`, `megathink`, `ultrathink` |
 | `--llm PROVIDER` | LLM CLI to use: `claude` or `codex` |
 | `--codex` | Use Codex CLI (same as `--llm codex`) |
+| `--no-pr` | Just commit on current branch, don't create PR |
 
 ---
 
@@ -339,6 +343,7 @@ chmod +x claude_automator*.py
 | `-m, --mode` | Improvement mode (repeatable) |
 | `-c, --config` | JSON config file |
 | `--auto-merge` | Auto-merge approved PRs |
+| `--no-pr` | Just commit, don't create PR |
 | `--think LEVEL` | Thinking budget |
 | `--dry-run` | Preview without executing |
 
