@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from claude_automator import (
+from let_claude_code.automator import (
     validate_path,
     validate_branch_name,
     validate_cron_expression,
@@ -762,7 +762,8 @@ class TestSchedulingFunctions(unittest.TestCase):
         self.reviewer = AutoReviewer(
             project_dir=self.tmpdir,
             base_branch="main",
-            modes=["fix_bugs"]
+            modes=["fix_bugs"],
+            create_pr=True,  # Test PR workflow
         )
 
     def tearDown(self):
@@ -775,7 +776,7 @@ class TestSchedulingFunctions(unittest.TestCase):
     def test_run_loop_calls_run_once(self, mock_print, mock_run_once):
         """Should call run_once repeatedly in a loop."""
         # Import run_loop
-        from claude_automator import run_loop
+        from let_claude_code.automator import run_loop
 
         # Set up mock to raise after 3 calls to break the infinite loop
         call_count = 0
@@ -803,7 +804,7 @@ class TestSchedulingFunctions(unittest.TestCase):
     @patch('builtins.print')
     def test_run_with_interval_respects_interval(self, mock_print, mock_run_once, mock_time, mock_sleep):
         """Should wait for remaining interval time after each run."""
-        from claude_automator import run_with_interval
+        from let_claude_code.automator import run_with_interval
 
         # Simulate run_once taking 2 seconds when interval is 10
         call_count = 0
@@ -842,7 +843,7 @@ class TestSchedulingFunctions(unittest.TestCase):
     @patch('builtins.print')
     def test_run_with_interval_no_sleep_if_run_exceeds_interval(self, mock_print, mock_run_once, mock_time, mock_sleep):
         """Should not sleep if run_once takes longer than interval."""
-        from claude_automator import run_with_interval
+        from let_claude_code.automator import run_with_interval
 
         # Simulate run_once taking 15 seconds when interval is 10
         call_count = 0
@@ -886,7 +887,8 @@ class TestRunOnceWorkflow(unittest.TestCase):
             base_branch="main",
             auto_merge=False,
             max_iterations=3,
-            modes=["fix_bugs"]
+            modes=["fix_bugs"],
+            create_pr=True,  # Test PR workflow
         )
 
     def tearDown(self):

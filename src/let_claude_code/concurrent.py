@@ -36,13 +36,11 @@ import shutil
 import subprocess
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from claude_automator import (
+from .automator import (
     AutoReviewer,
-    validate_path,
     validate_branch_name,
     get_combined_prompt,
     IMPROVEMENT_MODES,
@@ -136,7 +134,7 @@ def run_worker(
     llm_provider: str,
     tg_bot_token: str | None,
     tg_chat_id: str | None,
-    no_pr: bool = False,
+    create_pr: bool = False,
 ) -> WorkerResult:
     """Run a single worker through the full PR cycle."""
     start_time = time.time()
@@ -172,7 +170,7 @@ def run_worker(
         modes=config.modes or ["improve_code"],
         think_level=think_level,
         llm_provider=llm_provider,
-        no_pr=no_pr,
+        create_pr=create_pr,
     )
 
     # Override branch name to include directory
@@ -230,7 +228,7 @@ def run_workers_parallel(
     max_workers: int | None,
     tg_bot_token: str | None,
     tg_chat_id: str | None,
-    no_pr: bool = False,
+    create_pr: bool = False,
 ) -> list[WorkerResult]:
     """Run all workers in parallel using git worktrees."""
     if not configs:
@@ -240,7 +238,7 @@ def run_workers_parallel(
         max_workers = min(len(configs), os.cpu_count() or 4)
 
     print(f"\n{'='*60}")
-    print(f"Concurrent Claude/Codex Automator")
+    print("Concurrent Claude/Codex Automator")
     print(f"{'='*60}")
     print(f"Project: {project_dir}")
     print(f"Base branch: {base_branch}")
@@ -249,8 +247,8 @@ def run_workers_parallel(
     print(f"LLM: {llm_provider}")
     if think_level != "normal":
         print(f"Thinking: {think_level}")
-    if no_pr:
-        print("PR: Disabled (commit only)")
+    if create_pr:
+        print(f"PR: Enabled → merge to {base_branch}")
     print(f"{'='*60}")
 
     for i, config in enumerate(configs, 1):
@@ -293,7 +291,7 @@ def run_workers_parallel(
                 llm_provider=llm_provider,
                 tg_bot_token=tg_bot_token,
                 tg_chat_id=tg_chat_id,
-                no_pr=no_pr,
+                create_pr=create_pr,
             )
             results.append(result)
 
@@ -352,7 +350,7 @@ def print_summary(results: list[WorkerResult]) -> None:
         if r.pr_url:
             print(f"    PR: {r.pr_url}")
         if r.merged:
-            print(f"    Merged: Yes")
+            print("    Merged: Yes")
         if r.error:
             print(f"    Error: {r.error}")
         if r.cost_usd > 0:
@@ -391,10 +389,6 @@ def main():
                         help="Improvement mode (can be repeated)")
 
     # Standard options (same as main script)
-    parser.add_argument("--project-dir", type=str, default=os.getcwd(),
-                        help="Project directory (default: current)")
-    parser.add_argument("--base-branch", type=str, default="main",
-                        help="Base branch (default: main)")
     parser.add_argument("--auto-merge", action="store_true",
                         help="Auto-merge approved PRs")
     parser.add_argument("--max-iterations", type=int, default=3,
@@ -406,8 +400,10 @@ def main():
                         help="LLM CLI to use (default: claude)")
     parser.add_argument("--codex", action="store_true",
                         help="Use Codex CLI (shorthand for --llm codex)")
-    parser.add_argument("--no-pr", action="store_true",
-                        help="Just commit on current branch, don't create PR")
+    parser.add_argument("--create-pr", nargs="?", const="main", metavar="BRANCH",
+                        help="Create PR targeting BRANCH (default: main)")
+    parser.add_argument("-y", "--yes", action="store_true",
+                        help="Skip confirmation prompt")
     parser.add_argument("--max-workers", "-w", type=int,
                         help="Max parallel workers")
 
@@ -426,18 +422,16 @@ def main():
     if args.codex:
         args.llm = "codex"
 
-    # Validate inputs
-    try:
-        project_dir = validate_path(args.project_dir, must_exist=True, must_be_dir=True)
-    except ValueError as e:
-        print(f"Error: Invalid project directory: {e}")
-        sys.exit(1)
+    # Use current directory as project path
+    project_dir = Path(os.getcwd()).resolve()
 
-    try:
-        validate_branch_name(args.base_branch)
-    except ValueError as e:
-        print(f"Error: Invalid base branch: {e}")
-        sys.exit(1)
+    # Validate target branch if specified
+    if args.create_pr:
+        try:
+            validate_branch_name(args.create_pr)
+        except ValueError as e:
+            print(f"Error: Invalid target branch: {e}")
+            sys.exit(1)
 
     # Build worker configs
     configs: list[WorkerConfig] = []
@@ -500,11 +494,39 @@ def main():
             print()
         sys.exit(0)
 
+    # Get current branch name
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=project_dir, capture_output=True, text=True, timeout=10
+        )
+        current_branch = result.stdout.strip() if result.returncode == 0 else "unknown"
+    except Exception:
+        current_branch = "unknown"
+
+    # Warn if committing directly to current branch
+    if not args.create_pr and not args.yes:
+        print("\n" + "=" * 60)
+        print("⚠️  WARNING: Direct commit mode")
+        print("=" * 60)
+        print("Commits will be made directly to worktree branches")
+        print(f"Based on current branch: {current_branch}")
+        print("No PRs will be created, no review cycle.")
+        print("=" * 60)
+        try:
+            response = input("\nContinue? [y/N] ").strip().lower()
+            if response not in ('y', 'yes'):
+                print("Aborted.")
+                sys.exit(0)
+        except (EOFError, KeyboardInterrupt):
+            print("\nAborted.")
+            sys.exit(0)
+
     # Run workers
     results = run_workers_parallel(
         configs=configs,
         project_dir=project_dir,
-        base_branch=args.base_branch,
+        base_branch=args.create_pr or "main",
         auto_merge=args.auto_merge,
         max_iterations=args.max_iterations,
         think_level=args.think,
@@ -512,7 +534,7 @@ def main():
         max_workers=args.max_workers,
         tg_bot_token=args.tg_bot_token,
         tg_chat_id=args.tg_chat_id,
-        no_pr=args.no_pr,
+        create_pr=bool(args.create_pr),
     )
 
     # Print summary

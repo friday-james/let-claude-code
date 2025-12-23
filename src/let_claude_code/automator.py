@@ -858,7 +858,7 @@ class AutoReviewer:
         modes: list[str] | None = None,
         think_level: str = "normal",
         llm_provider: str = "claude",
-        no_pr: bool = False,
+        create_pr: bool = False,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
         self.auto_merge = auto_merge
@@ -874,7 +874,7 @@ class AutoReviewer:
         self.session_id: str | None = None  # For continuing sessions
         self.think_level = think_level  # Thinking budget: normal, think, megathink, ultrathink
         self.llm_provider = llm_provider  # LLM CLI provider: claude or codex
-        self.no_pr = no_pr  # If True, just commit on current branch without creating PR
+        self.create_pr = create_pr  # If True, create PR with review cycle
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -1211,8 +1211,8 @@ class AutoReviewer:
             self.log("=" * 60)
             self.log("Starting review cycle")
 
-            # In no_pr mode, just run on the current branch without creating a new one
-            if self.no_pr:
+            # Default: just run on the current branch without creating a new one
+            if not self.create_pr:
                 self.log("Running in no-PR mode (commits only)...")
                 success, summary = self.run_claude(self.review_prompt, timeout=3600)
                 if not success:
@@ -1346,9 +1346,7 @@ def main():
     parser.add_argument("--northstar", "-n", action="store_true", help="Use NORTHSTAR.md")
     parser.add_argument("--init-northstar", action="store_true", help="Create NORTHSTAR.md template")
     parser.add_argument("--list-modes", action="store_true", help="List modes")
-    parser.add_argument("--project-dir", type=str, default=os.getcwd(), help="Project directory")
     parser.add_argument("--auto-merge", action="store_true", help="Auto-merge approved PRs")
-    parser.add_argument("--base-branch", type=str, default="main", help="Base branch")
     parser.add_argument("--max-iterations", type=int, default=3, help="Max review-fix iterations")
     parser.add_argument("--tg-bot-token", type=str, default=os.environ.get("TG_BOT_TOKEN"))
     parser.add_argument("--tg-chat-id", type=str, default=os.environ.get("TG_CHAT_ID"))
@@ -1359,8 +1357,10 @@ def main():
                         help="LLM CLI to use (default: claude)")
     parser.add_argument("--codex", action="store_true",
                         help="Use Codex CLI (shorthand for --llm codex)")
-    parser.add_argument("--no-pr", action="store_true",
-                        help="Just commit on current branch, don't create PR")
+    parser.add_argument("--create-pr", nargs="?", const="main", metavar="BRANCH",
+                        help="Create PR targeting BRANCH (default: main)")
+    parser.add_argument("-y", "--yes", action="store_true",
+                        help="Skip confirmation prompt")
 
     args = parser.parse_args()
 
@@ -1371,10 +1371,13 @@ def main():
         print(get_mode_list())
         sys.exit(0)
 
+    # Use current directory as project path
+    project_path = Path(os.getcwd()).resolve()
+
     # Validate inputs early to catch errors before doing any work
     try:
-        project_path = validate_path(args.project_dir, must_exist=True, must_be_dir=True)
-        validate_branch_name(args.base_branch)
+        if args.create_pr:
+            validate_branch_name(args.create_pr)
         if args.interval:
             validate_positive_int(args.interval, "interval", max_value=86400 * 7)  # Max 1 week
         if args.max_iterations:
@@ -1444,11 +1447,38 @@ def main():
             if not selected_modes:
                 sys.exit(0)
 
+    # Get current branch name
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=project_path, capture_output=True, text=True, timeout=10
+        )
+        current_branch = result.stdout.strip() if result.returncode == 0 else "unknown"
+    except Exception:
+        current_branch = "unknown"
+
+    # Warn if committing directly to current branch
+    if not args.create_pr and not args.yes:
+        print("\n" + "=" * 60)
+        print("⚠️  WARNING: Direct commit mode")
+        print("=" * 60)
+        print(f"Commits will be made directly to: {current_branch}")
+        print("No PR will be created, no review cycle.")
+        print("=" * 60)
+        try:
+            response = input("\nContinue? [y/N] ").strip().lower()
+            if response not in ('y', 'yes'):
+                print("Aborted.")
+                sys.exit(0)
+        except (EOFError, KeyboardInterrupt):
+            print("\nAborted.")
+            sys.exit(0)
+
     print("\n" + "=" * 60)
     print("Claude Automator")
     print("=" * 60)
-    print(f"Project: {args.project_dir}")
-    print(f"Branch: {args.base_branch}")
+    print(f"Project: {project_path}")
+    print(f"Branch: {current_branch}")
     print(f"LLM: {args.llm}")
     if "northstar" in selected_modes:
         print("Mode: North Star")
@@ -1456,14 +1486,14 @@ def main():
         print(f"Modes: {', '.join(IMPROVEMENT_MODES[m]['name'] for m in selected_modes if m in IMPROVEMENT_MODES)}")
     if args.think != "normal":
         print(f"Thinking: {args.think}")
-    if args.no_pr:
-        print("PR: Disabled (commit only)")
+    if args.create_pr:
+        print(f"PR: Enabled → merge to {args.create_pr}")
     print("=" * 60 + "\n")
 
     reviewer = AutoReviewer(
-        project_dir=args.project_dir,
+        project_dir=project_path,
         auto_merge=args.auto_merge,
-        base_branch=args.base_branch,
+        base_branch=args.create_pr or "main",
         tg_bot_token=args.tg_bot_token,
         tg_chat_id=args.tg_chat_id,
         max_iterations=args.max_iterations,
@@ -1471,7 +1501,7 @@ def main():
         modes=selected_modes,
         think_level=args.think,
         llm_provider=args.llm,
-        no_pr=args.no_pr,
+        create_pr=bool(args.create_pr),
     )
 
     if args.once:

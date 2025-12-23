@@ -3,35 +3,70 @@
 ### Set it. Forget it. Wake up to a better codebase.
 
 ```
-You: ./claude_automator.py --loop
-Claude: *improves your code while you sleep*
-Claude: *creates PR*
-Claude: *reviews its own PR*
-Claude: *fixes review feedback*
-Claude: *repeats forever*
-You: *wakes up to mass merged PRs*
+You: cook --once -m fix_bugs
+Claude: *improves your code*
+Claude: *commits directly to your branch*
+You: *reviews the changes*
 ```
 
 ---
 
-## One Command
+## Install
 
 ```bash
-curl -O https://raw.githubusercontent.com/friday-james/let-claude-code/main/claude_automator.py
-chmod +x claude_automator.py
-./claude_automator.py --loop
+# From PyPI (when published)
+pip install let-claude-code
+
+# From GitHub
+pip install git+https://github.com/friday-james/let-claude-code.git
+
+# For cron support
+pip install let-claude-code[cron]
 ```
 
-That's it. Claude improves your code forever.
+This installs the `cook` command.
+
+---
+
+## Quick Start
+
+```bash
+# Run once and improve code (commits to current branch)
+cook --once -m improve_code
+
+# With PR workflow (creates branch, PR, review cycle)
+cook --once -m fix_bugs --create-pr
+
+# Skip confirmation prompt
+cook --once -m fix_bugs -y
+```
+
+By default, commits are made directly to your current branch. Use `--create-pr` to enable the full PR workflow with review cycles.
 
 ---
 
 ## What Happens
 
+**Default mode (direct commits):**
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                                                          │
-│   YOU RUN:  ./claude_automator.py --loop                │
+│   YOU RUN:  cook --once -m fix_bugs                      │
+│                                                          │
+│   CLAUDE (Improver)                                     │
+│   └── Reads your code, makes it better, commits         │
+│                                                          │
+│   DONE                                                  │
+│   └── Changes committed to your current branch          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+```
+
+**With `--create-pr` (full PR workflow):**
+```
+┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│   YOU RUN:  cook --loop --create-pr                      │
 │                                                          │
 │   CLAUDE 1 (Improver)                                   │
 │   └── Reads your code, makes it better, commits         │
@@ -53,8 +88,6 @@ That's it. Claude improves your code forever.
 └──────────────────────────────────────────────────────────┘
 ```
 
-Three Claudes. Arguing with each other. Making your code better. Forever.
-
 ---
 
 ## Pick Your Mode
@@ -64,19 +97,19 @@ Three Claudes. Arguing with each other. Making your code better. Forever.
 Create a `NORTHSTAR.md` file describing your ideal codebase:
 
 ```bash
-./claude_automator.py --init-northstar   # Creates template
-vim NORTHSTAR.md                          # Customize your goals
-./claude_automator.py --loop              # Claude iterates towards it
+cook --init-northstar   # Creates template
+vim NORTHSTAR.md        # Customize your goals
+cook --once              # Claude iterates towards it
 ```
 
 **Option 2: Use preset modes**
 
 ```bash
-./claude_automator.py --loop -m fix_bugs      # Hunt and fix bugs
-./claude_automator.py --loop -m security      # Find vulnerabilities
-./claude_automator.py --loop -m add_tests     # Add missing tests
-./claude_automator.py --loop -m improve_code  # Refactor messy code
-./claude_automator.py --loop -m all           # Do everything
+cook --once -m fix_bugs      # Hunt and fix bugs
+cook --once -m security      # Find vulnerabilities
+cook --once -m add_tests     # Add missing tests
+cook --once -m improve_code  # Refactor messy code
+cook --once -m all           # Do everything
 ```
 
 | Mode | What it does |
@@ -181,28 +214,34 @@ A high-quality, well-maintained codebase that is secure, performant, and easy to
 ## All The Ways
 
 ```bash
-# The main event - loop forever
-./claude_automator.py --loop
+# Run once (default: commits to current branch)
+cook --once -m improve_code
 
-# Run once (for testing)
-./claude_automator.py --once -m improve_code
+# Run once with PR workflow (merge to main)
+cook --once -m improve_code --create-pr
+
+# Run once with PR to specific branch
+cook --once -m improve_code --create-pr develop
+
+# Skip confirmation prompt
+cook --once -m fix_bugs -y
+
+# Loop forever (with PR workflow)
+cook --loop --create-pr
 
 # Run every hour
-./claude_automator.py --interval 3600
+cook --interval 3600 --create-pr
 
-# Run on cron (requires: pip install croniter)
-./claude_automator.py --cron "0 */4 * * *"
+# Run on cron (requires: pip install let-claude-code[cron])
+cook --cron "0 */4 * * *" --create-pr
 
-# Auto-merge when approved (living dangerously)
-./claude_automator.py --loop --auto-merge
-
-# Just commit on current branch, no PR (for feature branches)
-./claude_automator.py --once -m improve_code --no-pr
+# Auto-merge when approved
+cook --loop --create-pr --auto-merge
 
 # Get Telegram notifications
 export TG_BOT_TOKEN="your_token"
 export TG_CHAT_ID="your_chat_id"
-./claude_automator.py --loop
+cook --loop --create-pr
 ```
 
 ---
@@ -229,22 +268,21 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 
 | Option | What it does |
 |:-------|:-------------|
-| `--loop` | **Run forever** (start next immediately) |
 | `--once` | Run once and exit |
+| `--loop` | Run forever (start next immediately) |
 | `--interval N` | Run every N seconds |
 | `--cron "expr"` | Run on cron schedule |
 | `-m, --mode MODE` | Improvement mode (repeatable) |
 | `-n, --northstar` | Force NORTHSTAR.md mode |
 | `--init-northstar` | Create NORTHSTAR.md template |
 | `--list-modes` | Show all available modes |
-| `--project-dir PATH` | Project directory (default: `.`) |
-| `--base-branch NAME` | Base branch for PRs (default: `main`) |
+| `--create-pr [BRANCH]` | Create PR targeting BRANCH (default: `main`) |
 | `--auto-merge` | Auto-merge approved PRs |
 | `--max-iterations N` | Max review-fix rounds (default: `3`) |
+| `-y, --yes` | Skip confirmation prompt |
 | `--think LEVEL` | Thinking budget: `normal`, `think`, `megathink`, `ultrathink` |
 | `--llm PROVIDER` | LLM CLI to use: `claude` or `codex` |
 | `--codex` | Use Codex CLI (same as `--llm codex`) |
-| `--no-pr` | Just commit on current branch, don't create PR |
 
 ---
 
@@ -253,10 +291,10 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 Use `--think` to give Claude more thinking time for complex tasks:
 
 ```bash
-./claude_automator.py --loop --think ultrathink    # Maximum thinking budget
-./claude_automator.py --loop --think megathink     # 10,000 token budget
-./claude_automator.py --loop --think think         # 4,000 token budget
-./claude_automator.py --loop                       # Normal (default)
+cook --once --think ultrathink    # Maximum thinking budget
+cook --once --think megathink     # 10,000 token budget
+cook --once --think think         # 4,000 token budget
+cook --once                       # Normal (default)
 ```
 
 | Level | Budget | Best For |
@@ -266,43 +304,30 @@ Use `--think` to give Claude more thinking time for complex tasks:
 | `megathink` | 10,000 tokens | Complex refactoring |
 | `ultrathink` | Maximum | Architectural decisions, deep analysis |
 
-**When to use `--think ultrathink`:**
-- Complex architectural decisions
-- Performance optimization challenges
-- Security vulnerability analysis
-- Large-scale refactoring
-
-The thinking keywords are Claude Code magic words that trigger extended reasoning. Reserve higher levels for tasks where thorough analysis justifies the additional compute cost.
-
 ---
 
 ## Concurrent Workers
 
-Run multiple Claudes in parallel, each on its own branch. Each worker runs the **full cycle** (improve → PR → review → fix → merge) scoped to a directory.
+Run multiple Claudes in parallel, each on its own worktree.
 
 ```bash
-# Download both files
-curl -O https://raw.githubusercontent.com/friday-james/let-claude-code/main/claude_automator.py
-curl -O https://raw.githubusercontent.com/friday-james/let-claude-code/main/claude_automator_concurrent.py
-chmod +x claude_automator*.py
-
 # Run on specific directories
-./claude_automator_concurrent.py -d src lib scripts -p "Fix bugs"
+cook-concurrent -d src lib scripts -p "Fix bugs"
 
-# Auto-merge when approved
-./claude_automator_concurrent.py -d src lib --auto-merge
+# With PR workflow
+cook-concurrent -d src lib --create-pr --auto-merge
 
 # With extended thinking
-./claude_automator_concurrent.py -d src -m security --think ultrathink
+cook-concurrent -d src -m security --think ultrathink
 
 # Use Codex CLI
-./claude_automator_concurrent.py -d src --codex
+cook-concurrent -d src --codex
 ```
 
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                                                          │
-│   YOU RUN:  ./claude_automator_concurrent.py -d src lib  │
+│   YOU RUN:  cook-concurrent -d src lib --create-pr       │
 │                                                          │
 │   Worker 1 (src/)              Worker 2 (lib/)           │
 │   ┌────────────────┐           ┌────────────────┐        │
@@ -333,7 +358,7 @@ chmod +x claude_automator*.py
 ```
 
 ```bash
-./claude_automator_concurrent.py -c workers.json --auto-merge
+cook-concurrent -c workers.json --create-pr --auto-merge
 ```
 
 | Option | What it does |
@@ -342,8 +367,9 @@ chmod +x claude_automator*.py
 | `-p, --prompt` | Prompt for all workers |
 | `-m, --mode` | Improvement mode (repeatable) |
 | `-c, --config` | JSON config file |
+| `--create-pr [BRANCH]` | Create PR targeting BRANCH (default: `main`) |
 | `--auto-merge` | Auto-merge approved PRs |
-| `--no-pr` | Just commit, don't create PR |
+| `-y, --yes` | Skip confirmation prompt |
 | `--think LEVEL` | Thinking budget |
 | `--dry-run` | Preview without executing |
 
@@ -351,15 +377,13 @@ chmod +x claude_automator*.py
 
 ## Requirements
 
-- **Python 3.10+** (zero dependencies)
+- **Python 3.10+**
 - **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** or **Codex CLI** installed
-- **[GitHub CLI](https://cli.github.com/)** (`gh`) installed
+- **[GitHub CLI](https://cli.github.com/)** (`gh`) installed (for `--create-pr`)
 - **Git repo** with remote
 
 **Recommended:** Enable auto-delete branches in your GitHub repo:
 **Settings → General → Pull Requests → ✓ Automatically delete head branches**
-
-This keeps your repo clean after PRs are merged.
 
 ---
 
@@ -371,10 +395,10 @@ You're too busy shipping features to fix it.
 
 What if your codebase could improve itself?
 
-That's this. One command. Claude works while you don't. PRs appear. Code gets better.
+That's this. One command. Claude works while you don't. Code gets better.
 
 ```bash
-./claude_automator.py --loop
+cook --once -m improve_code
 ```
 
 **Let Claude code.**
