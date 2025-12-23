@@ -234,6 +234,9 @@ cook --once -m improve_code --create-pr develop
 # Skip confirmation prompt
 cook --once -m fix_bugs -y
 
+# YOLO mode: loop + create PR + auto-merge + skip prompts
+cook --yolo -m improve_code
+
 # Loop forever (with PR workflow)
 cook --loop --create-pr
 
@@ -278,6 +281,7 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 |:-------|:-------------|
 | `--once` | Run once and exit |
 | `--loop` | Run forever (start next immediately) |
+| `--yolo` | YOLO mode: `--loop --create-pr --auto-merge -y` combined |
 | `--interval N` | Run every N seconds |
 | `--cron "expr"` | Run on cron schedule |
 | `-m, --mode MODE` | Improvement mode (repeatable) |
@@ -289,7 +293,6 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 | `--max-iterations N` | Max review-fix rounds (default: `3`) |
 | `-y, --yes` | Skip confirmation prompt |
 | `--think LEVEL` | Thinking budget: `normal`, `think`, `megathink`, `ultrathink` |
-| `--llm PROVIDER` | LLM CLI to use: `claude` or `codex` |
 
 ---
 
@@ -324,11 +327,11 @@ cook-concurrent -d src lib scripts -p "Fix bugs"
 # With PR workflow
 cook-concurrent -d src lib --create-pr --auto-merge
 
+# YOLO mode
+cook-concurrent -d src lib --yolo
+
 # With extended thinking
 cook-concurrent -d src -m security --think ultrathink
-
-# Use Codex CLI
-cook-concurrent -d src --llm codex
 ```
 
 ```
@@ -376,6 +379,7 @@ cook-concurrent -c workers.json --create-pr --auto-merge
 | `-c, --config` | JSON config file |
 | `--create-pr [BRANCH]` | Create PR targeting BRANCH (default: `main`) |
 | `--auto-merge` | Auto-merge approved PRs |
+| `--yolo` | YOLO mode: `--create-pr --auto-merge -y` combined |
 | `-y, --yes` | Skip confirmation prompt |
 | `--think LEVEL` | Thinking budget |
 | `--dry-run` | Preview without executing |
@@ -385,7 +389,7 @@ cook-concurrent -c workers.json --create-pr --auto-merge
 ## Requirements
 
 - **Python 3.10+**
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** or **Codex CLI** installed
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** installed
 - **[GitHub CLI](https://cli.github.com/)** (`gh`) installed (for `--create-pr`)
 - **Git repo** with remote
 
