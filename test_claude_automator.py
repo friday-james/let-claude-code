@@ -18,6 +18,7 @@ from let_claude_code.automator import (
     validate_cron_expression,
     validate_positive_int,
     get_combined_prompt,
+    get_goal_prompt,
     get_northstar_prompt,
     get_pr_review_prompt,
     get_fix_feedback_prompt,
@@ -251,6 +252,19 @@ class TestGetCombinedPrompt(unittest.TestCase):
 
 class TestPromptGenerators(unittest.TestCase):
     """Tests for prompt generator functions."""
+
+    def test_get_goal_prompt_includes_goal(self):
+        """Should include the provided goal in the prompt."""
+        goal = "Add user authentication with JWT"
+        result = get_goal_prompt(goal)
+        self.assertIn(goal, result)
+
+    def test_get_goal_prompt_includes_instructions(self):
+        """Should include instructions for making progress."""
+        result = get_goal_prompt("test goal")
+        self.assertIn("Analyze the current state", result)
+        self.assertIn("Make concrete progress", result)
+        self.assertIn("Commit your changes", result)
 
     def test_get_northstar_prompt_includes_content(self):
         """Should include the provided content in the prompt."""

@@ -4,6 +4,7 @@ from .automator import (
     AutoReviewer,
     IMPROVEMENT_MODES,
     get_combined_prompt,
+    get_goal_prompt,
     get_northstar_prompt,
 )
 
@@ -12,5 +13,6 @@ __all__ = [
     "AutoReviewer",
     "IMPROVEMENT_MODES",
     "get_combined_prompt",
+    "get_goal_prompt",
     "get_northstar_prompt",
 ]

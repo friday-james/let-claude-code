@@ -392,6 +392,62 @@ A high-quality, well-maintained codebase that is secure, performant, and easy to
 # PROMPT GENERATORS
 # ============================================================================
 
+def get_goal_prompt(goal: str) -> str:
+    """Generate a prompt for Claude to work towards a user-specified goal.
+
+    Args:
+        goal: The goal description provided by the user.
+
+    Returns:
+        A formatted prompt instructing Claude to analyze the codebase and make
+        incremental progress towards the specified goal.
+    """
+    return f"""You are working towards a specific goal. Read the goal below and make progress towards it.
+
+## Goal
+
+{goal}
+
+---
+
+## Your Task
+
+1. **Analyze the current state**: Review the codebase to understand what has already been implemented and what's needed to achieve the goal.
+
+2. **Identify the next steps**: Determine the most impactful improvements you can make RIGHT NOW to move closer to the goal. Focus on:
+   - Features or changes needed to achieve the goal
+   - Quality improvements that align with the goal
+   - Technical debt that blocks progress
+   - Missing functionality
+
+3. **Make concrete progress**: Implement changes that move the project forward. This could include:
+   - Adding new features
+   - Improving existing code
+   - Fixing issues
+   - Refactoring to enable the goal
+
+4. **Commit your changes**: For each improvement, commit with a descriptive message:
+   - "feat: [description]" for new features
+   - "fix: [description]" for fixes
+   - "refactor: [description]" for refactoring
+   - "docs: [description]" for documentation
+
+## Guidelines
+
+- **Be incremental**: Make meaningful but atomic changes. Don't try to do everything at once.
+- **Prioritize impact**: Focus on changes that provide the most value towards the goal.
+- **Stay aligned**: Every change should clearly connect to the goal.
+- **Don't break things**: Ensure existing functionality continues to work.
+
+## Limits
+
+- Focus on at most 3-5 related improvements per run
+- If the goal is too large, break it into smaller steps and complete one step
+
+If the goal is already fully achieved, say "Goal achieved!" and summarize what was done.
+"""
+
+
 def get_northstar_prompt(northstar_content: str) -> str:
     """Generate a prompt for Claude to work towards North Star goals.
 
@@ -858,6 +914,7 @@ class AutoReviewer:
         modes: list[str] | None = None,
         think_level: str = "normal",
         create_pr: bool = False,
+        work_branch: str | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
         self.auto_merge = auto_merge
@@ -873,6 +930,7 @@ class AutoReviewer:
         self.session_id: str | None = None  # For continuing sessions
         self.think_level = think_level  # Thinking budget: normal, think, megathink, ultrathink
         self.create_pr = create_pr  # If True, create PR with review cycle
+        self.work_branch = work_branch  # If set, checkout to this branch before working
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -1112,7 +1170,14 @@ class AutoReviewer:
 
     def merge_pr(self, pr_url: str) -> bool:
         pr_number = pr_url.rstrip('/').split('/')[-1]
+        branch_to_delete = self.current_branch
         success, _ = self.run_cmd(["gh", "pr", "merge", pr_number, "--squash", "--delete-branch"], timeout=60)
+        if success and branch_to_delete:
+            # Switch to base branch and delete local branch
+            self.run_cmd(["git", "checkout", self.base_branch])
+            self.run_cmd(["git", "branch", "-D", branch_to_delete])
+            self.current_branch = None
+            self.log(f"Deleted branch: {branch_to_delete}")
         return success
 
     def cleanup_branch(self):
@@ -1128,6 +1193,23 @@ class AutoReviewer:
         try:
             self.log("=" * 60)
             self.log("Starting review cycle")
+
+            # Checkout to work branch if specified
+            if self.work_branch:
+                _, current = self.run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+                current = current.strip()
+                if current != self.work_branch:
+                    self.log(f"Checking out to {self.work_branch}...")
+                    success, _ = self.run_cmd(["git", "checkout", self.work_branch])
+                    if not success:
+                        # Try to create the branch if it doesn't exist
+                        success, _ = self.run_cmd(["git", "checkout", "-b", self.work_branch])
+                        if not success:
+                            self.log(f"Failed to checkout to {self.work_branch}")
+                            self.telegram.send(f"⚠️ *Auto-Review Failed*\n\nCould not checkout to {self.work_branch}.")
+                            return False
+                else:
+                    self.log(f"Already on {self.work_branch}")
 
             # Default: just run on the current branch without creating a new one
             if not self.create_pr:
@@ -1263,6 +1345,7 @@ def main():
     parser.add_argument("--mode", "-m", type=str, action="append", dest="modes", help="Improvement mode")
     parser.add_argument("--northstar", "-n", action="store_true", help="Use NORTHSTAR.md")
     parser.add_argument("--init-northstar", action="store_true", help="Create NORTHSTAR.md template")
+    parser.add_argument("--goal", "-g", type=str, help="Work towards a specific goal")
     parser.add_argument("--list-modes", action="store_true", help="List modes")
     parser.add_argument("--auto-merge", action="store_true", help="Auto-merge approved PRs")
     parser.add_argument("--max-iterations", type=int, default=3, help="Max review-fix iterations")
@@ -1273,6 +1356,8 @@ def main():
                         default="normal", help="Thinking budget level (default: normal)")
     parser.add_argument("--create-pr", nargs="?", const="main", metavar="BRANCH",
                         help="Create PR targeting BRANCH (default: main)")
+    parser.add_argument("--branch", "-b", type=str,
+                        help="Work on specified branch (checkout if needed)")
     parser.add_argument("-y", "--yes", action="store_true",
                         help="Skip confirmation prompt")
     parser.add_argument("--yolo", action="store_true",
@@ -1298,6 +1383,8 @@ def main():
     try:
         if args.create_pr:
             validate_branch_name(args.create_pr)
+        if args.branch:
+            validate_branch_name(args.branch)
         if args.interval:
             validate_positive_int(args.interval, "interval", max_value=86400 * 7)  # Max 1 week
         if args.max_iterations:
@@ -1322,7 +1409,10 @@ def main():
     if args.northstar:
         args.modes = ["northstar"]
 
-    if args.prompt_file:
+    if args.goal:
+        review_prompt = get_goal_prompt(args.goal)
+        selected_modes = ["goal"]
+    elif args.prompt_file:
         review_prompt = Path(args.prompt_file).read_text()
         selected_modes = ["custom"]
     elif args.modes:
@@ -1398,8 +1488,13 @@ def main():
     print("Claude Automator")
     print("=" * 60)
     print(f"Project: {project_path}")
-    print(f"Branch: {current_branch}")
-    if "northstar" in selected_modes:
+    if args.branch:
+        print(f"Work branch: {args.branch}" + (f" (current: {current_branch})" if current_branch != args.branch else " (current)"))
+    else:
+        print(f"Branch: {current_branch}")
+    if "goal" in selected_modes:
+        print(f"Mode: Goal - {args.goal[:50]}{'...' if len(args.goal) > 50 else ''}")
+    elif "northstar" in selected_modes:
         print("Mode: North Star")
     else:
         print(f"Modes: {', '.join(IMPROVEMENT_MODES[m]['name'] for m in selected_modes if m in IMPROVEMENT_MODES)}")
@@ -1420,6 +1515,7 @@ def main():
         modes=selected_modes,
         think_level=args.think,
         create_pr=bool(args.create_pr),
+        work_branch=args.branch,
     )
 
     if args.once:

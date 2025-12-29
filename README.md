@@ -120,6 +120,13 @@ cook --once -m improve_code  # Refactor messy code
 cook --once -m all           # Do everything
 ```
 
+**Option 3: Specify a goal directly**
+
+```bash
+cook --once --goal "Add user authentication with JWT"
+cook --loop -g "Refactor the API to use async/await"
+```
+
 | Mode | What it does |
 |:-----|:-------------|
 | `fix_bugs` | Hunts down actual bugs and fixes them |
@@ -286,10 +293,12 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 | `--cron "expr"` | Run on cron schedule |
 | `-m, --mode MODE` | Improvement mode (repeatable) |
 | `-n, --northstar` | Force NORTHSTAR.md mode |
+| `-g, --goal GOAL` | Work towards a specific goal |
 | `--init-northstar` | Create NORTHSTAR.md template |
 | `--list-modes` | Show all available modes |
 | `--create-pr [BRANCH]` | Create PR targeting BRANCH (default: `main`) |
-| `--auto-merge` | Auto-merge approved PRs |
+| `-b, --branch BRANCH` | Work on specified branch (checkout if needed) |
+| `--auto-merge` | Auto-merge approved PRs (deletes branch after) |
 | `--max-iterations N` | Max review-fix rounds (default: `3`) |
 | `-y, --yes` | Skip confirmation prompt |
 | `--think LEVEL` | Thinking budget: `normal`, `think`, `megathink`, `ultrathink` |
