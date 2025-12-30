@@ -405,6 +405,19 @@ cook-concurrent -c workers.json --create-pr --auto-merge
 **Recommended:** Enable auto-delete branches in your GitHub repo:
 **Settings → General → Pull Requests → ✓ Automatically delete head branches**
 
+**Required:** Configure Claude Code to allow all permissions.
+
+On first run, `cook` will offer to configure this automatically. You can also manually add this to `.claude/settings.json` (project-level) or `~/.claude/settings.json` (user-level):
+```json
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  }
+}
+```
+
+This is required because `cook` invokes `claude` programmatically and cannot pass the `--dangerously-skip-permissions` flag.
+
 ---
 
 ## Philosophy

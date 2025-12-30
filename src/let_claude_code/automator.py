@@ -724,6 +724,89 @@ def validate_positive_int(value: int, name: str, max_value: int | None = None) -
     return value
 
 
+def check_claude_permissions(project_dir: Path) -> tuple[bool, str]:
+    """Check if Claude Code permissions are properly configured.
+
+    Args:
+        project_dir: The project directory
+
+    Returns:
+        Tuple of (is_configured, message)
+    """
+    import json
+
+    # Check project-level settings
+    project_settings = project_dir / ".claude" / "settings.json"
+    user_settings = Path.home() / ".claude" / "settings.json"
+
+    for settings_path in [project_settings, user_settings]:
+        if settings_path.exists():
+            try:
+                with open(settings_path) as f:
+                    settings = json.load(f)
+                    permissions = settings.get("permissions", {})
+                    if permissions.get("defaultMode") == "bypassPermissions":
+                        return True, f"Permissions configured in {settings_path}"
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    return False, """
+⚠️  WARNING: Claude Code permissions not configured!
+
+For seamless automation, you need to configure Claude Code to bypass permissions.
+
+Without this, Claude will prompt for permissions during execution, which will
+interrupt the automation. See: https://github.com/friday-james/let-claude-code#requirements
+"""
+
+
+def configure_claude_permissions(project_dir: Path, user_level: bool = False) -> tuple[bool, str]:
+    """Configure Claude Code permissions to bypassPermissions mode.
+
+    Args:
+        project_dir: The project directory
+        user_level: If True, configure at user level (~/.claude/settings.json),
+                   otherwise at project level (.claude/settings.json)
+
+    Returns:
+        Tuple of (success, message)
+    """
+    import json
+
+    if user_level:
+        settings_path = Path.home() / ".claude" / "settings.json"
+    else:
+        settings_path = project_dir / ".claude" / "settings.json"
+
+    try:
+        # Create directory if it doesn't exist
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Load existing settings or create new
+        settings = {}
+        if settings_path.exists():
+            try:
+                with open(settings_path) as f:
+                    settings = json.load(f)
+            except json.JSONDecodeError:
+                # Invalid JSON, start fresh
+                pass
+
+        # Update permissions
+        if "permissions" not in settings:
+            settings["permissions"] = {}
+        settings["permissions"]["defaultMode"] = "bypassPermissions"
+
+        # Write back
+        with open(settings_path, 'w') as f:
+            json.dump(settings, f, indent=2)
+            f.write('\n')  # Add trailing newline
+
+        return True, f"✓ Configured permissions in {settings_path}"
+    except (OSError, PermissionError) as e:
+        return False, f"✗ Failed to write {settings_path}: {e}"
+
+
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
@@ -1456,6 +1539,40 @@ def main():
             selected_modes = select_modes_interactive()
             if not selected_modes:
                 sys.exit(0)
+
+    # Check Claude Code permissions configuration
+    perms_configured, perms_msg = check_claude_permissions(project_path)
+    if not perms_configured:
+        print(perms_msg)
+        if not args.yes:
+            print("\nWould you like to configure this automatically?")
+            print("  [p] Project-level (.claude/settings.json)")
+            print("  [u] User-level (~/.claude/settings.json)")
+            print("  [n] No, continue without configuring")
+            try:
+                response = input("\nChoice [p/u/N]: ").strip().lower()
+                if response == 'p':
+                    success, msg = configure_claude_permissions(project_path, user_level=False)
+                    print(msg)
+                    if not success:
+                        print("Failed to configure. Continuing anyway...")
+                elif response == 'u':
+                    success, msg = configure_claude_permissions(project_path, user_level=True)
+                    print(msg)
+                    if not success:
+                        print("Failed to configure. Continuing anyway...")
+                elif response in ('n', ''):
+                    print("Continuing without configuring...")
+                    print("Note: Claude may prompt for permissions during execution.")
+                else:
+                    print("Invalid choice. Aborting.")
+                    sys.exit(0)
+            except (EOFError, KeyboardInterrupt):
+                print("\nAborted.")
+                sys.exit(0)
+        else:
+            print("\nProceeding anyway (--yes flag set)")
+            print("Note: Claude may prompt for permissions during execution.\n")
 
     # Get current branch name
     try:
