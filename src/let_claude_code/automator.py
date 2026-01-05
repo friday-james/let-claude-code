@@ -1358,6 +1358,26 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         data = json.loads(line)
                         msg_type = data.get("type", "")
 
+                        # Handle user input requests from Claude (only when use_gemini is enabled)
+                        if msg_type == "input_required" and self.use_gemini:
+                            question_text = data.get("message", {}).get("text", "") or data.get("description", "")
+                            print(f"\n\033[93m🤖 Claude asking: {question_text[:100]}...\033[0m")
+                            self.telegram.send(f"🤖 *Claude asking:*\n_{question_text[:200]}_")
+
+                            # Ask Gemini
+                            answer = self.ask_gemini(question_text, f"Project: {self.project_dir}")
+                            if answer:
+                                print("\n\033[92m✨ Gemini answered\033[0m")
+                                self.telegram.send("✨ *Gemini auto-answered*")
+                                process.stdin.write(answer + "\n")
+                                process.stdin.flush()
+                            else:
+                                # Gemini failed, use default "y" to proceed
+                                print("\n\033[91mGemini failed, proceeding with 'y'\033[0m")
+                                self.telegram.send("⚠️ *Gemini failed, proceeding with 'y'*")
+                                process.stdin.write("y\n")
+                                process.stdin.flush()
+
                         # Print assistant messages in real-time
                         if msg_type == "assistant" and "message" in data:
                             content = data["message"].get("content", [])
@@ -1513,6 +1533,26 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             self.current_branch = None
 
     def run_once(self) -> bool:
+        # Check for stale lock file and prompt to remove
+        if self.lock_file.path.exists():
+            self.log(f"Found stale lock file: {self.lock_file.path}")
+            print(f"\n⚠️  Found stale lock file: {self.lock_file.path}")
+            try:
+                response = input("Remove lock file and continue? [y/N]: ").strip().lower()
+                if response in ('y', 'yes'):
+                    try:
+                        self.lock_file.path.unlink()
+                        self.log("Lock file removed")
+                    except OSError as e:
+                        self.log(f"Failed to remove lock file: {e}")
+                        return False
+                else:
+                    self.log("Skipping")
+                    return False
+            except (EOFError, KeyboardInterrupt):
+                print("\nAborted")
+                return False
+
         if not self.lock_file.acquire():
             self.log("Another review is already running, skipping")
             return False
