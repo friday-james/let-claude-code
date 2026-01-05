@@ -998,6 +998,7 @@ class AutoReviewer:
         think_level: str = "normal",
         create_pr: bool = False,
         work_branch: str | None = None,
+        claude_flags: str | None = None,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
         self.auto_merge = auto_merge
@@ -1014,6 +1015,7 @@ class AutoReviewer:
         self.think_level = think_level  # Thinking budget: normal, think, megathink, ultrathink
         self.create_pr = create_pr  # If True, create PR with review cycle
         self.work_branch = work_branch  # If set, checkout to this branch before working
+        self.claude_flags = claude_flags  # Additional flags to pass to Claude CLI
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -1084,6 +1086,9 @@ class AutoReviewer:
                 cmd = ["claude", "--print", "--output-format", "stream-json", "--verbose"]
                 if self.session_id:
                     cmd.extend(["--resume", self.session_id])
+                # Add any additional claude flags specified by user
+                if self.claude_flags:
+                    cmd.extend(self.claude_flags.split())
 
                 # Run claude with prompt via stdin (avoids command line length limits)
                 process = subprocess.Popen(
@@ -1445,6 +1450,8 @@ def main():
                         help="Skip confirmation prompt")
     parser.add_argument("--yolo", action="store_true",
                         help="YOLO mode: --loop --create-pr --auto-merge -y combined")
+    parser.add_argument("--claude", type=str,
+                        help="Additional flags to pass to Claude CLI (space-separated)")
 
     args = parser.parse_args()
 
@@ -1633,6 +1640,7 @@ def main():
         think_level=args.think,
         create_pr=bool(args.create_pr),
         work_branch=args.branch,
+        claude_flags=args.claude,
     )
 
     if args.once:
