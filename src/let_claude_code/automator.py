@@ -1202,7 +1202,11 @@ class AutoReviewer:
                     cmd.extend(["--resume", self.session_id])
                 # Add any additional claude flags specified by user
                 if self.claude_flags:
-                    cmd.extend(self.claude_flags.split())
+                    # Expand ~ in arguments
+                    expanded_flags = []
+                    for flag in self.claude_flags.split():
+                        expanded_flags.append(os.path.expanduser(flag))
+                    cmd.extend(expanded_flags)
 
                 # Run claude with prompt via stdin (avoids command line length limits)
                 process = subprocess.Popen(
@@ -1567,7 +1571,7 @@ def main():
     parser.add_argument("--yolo", action="store_true",
                         help="YOLO mode: --loop --create-pr --auto-merge -y combined")
     parser.add_argument("--claude", type=str,
-                        help="Additional flags to pass to Claude CLI (space-separated)")
+                        help="Additional flags to pass to Claude CLI (space-separated, ~ is expanded)")
     parser.add_argument("--resume", action="store_true",
                         help="Show session selection menu to resume a previous session")
     parser.add_argument("--clear-sessions", action="store_true",
