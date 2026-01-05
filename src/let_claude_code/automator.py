@@ -1334,9 +1334,6 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                 process.stdin.write(prompt)
                 process.stdin.flush()
 
-                # Track accumulated text for question detection
-                accumulated_text = ""
-
                 result_data = {}
                 start_time = time.time()
 
@@ -1361,39 +1358,13 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         data = json.loads(line)
                         msg_type = data.get("type", "")
 
-                        # Handle user input requests from Claude
-                        if msg_type == "input_required" and self.use_gemini:
-                            question_text = data.get("message", {}).get("text", "") or data.get("description", "")
-                            accumulated_text += question_text + "\n"
-
-                            print(f"\n\033[93m🤖 Claude asking: {question_text[:100]}...\033[0m")
-                            self.telegram.send(f"🤖 *Claude is asking:*\n\n_{question_text[:200]}_")
-
-                            # Ask Gemini
-                            answer = self.ask_gemini(question_text, f"Project: {self.project_dir}")
-                            if answer:
-                                print(f"\n\033[92m✨ Gemini answered: {answer[:200]}...\033[0m")
-                                self.telegram.send(f"✨ *Gemini auto-answered:*\n\n_{answer[:300]}_")
-                                # Send answer to Claude
-                                process.stdin.write(answer + "\n")
-                                process.stdin.flush()
-                            else:
-                                # Gemini failed, ask user manually
-                                print("\n\033[91mGemini not available, please answer manually:\033[0m")
-                                self.telegram.send("⚠️ *Gemini failed, waiting for user input...*")
-                                user_input = input("> ")
-                                process.stdin.write(user_input + "\n")
-                                process.stdin.flush()
-
                         # Print assistant messages in real-time
                         if msg_type == "assistant" and "message" in data:
                             content = data["message"].get("content", [])
                             for block in content:
                                 block_type = block.get("type")
                                 if block_type == "text":
-                                    text = block.get("text", "")
-                                    print(text, end="", flush=True)
-                                    accumulated_text += text
+                                    print(block.get("text", ""), end="", flush=True)
                                 elif block_type == "thinking":
                                     # Print thinking content with visual distinction
                                     thinking_text = block.get("thinking", "")
