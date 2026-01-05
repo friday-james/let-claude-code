@@ -1689,6 +1689,10 @@ def run_with_cron(reviewer: AutoReviewer, cron_expr: str):
 # ============================================================================
 
 def main():
+    # Load environment variables from .env file
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=os.path.join(os.getcwd(), ".env"), override=False)
+
     parser = argparse.ArgumentParser(
         description="Claude Automator - Automatically improve your codebase",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1705,7 +1709,7 @@ def main():
     parser.add_argument("--list-modes", action="store_true", help="List modes")
     parser.add_argument("--auto-merge", action="store_true", help="Auto-merge approved PRs")
     parser.add_argument("--max-iterations", type=int, default=3, help="Max review-fix iterations")
-    parser.add_argument("--tg-bot-token", type=str, default=os.environ.get("TG_BOT_TOKEN") or os.environ.get("TELEGRAM_API_ID"))
+    parser.add_argument("--tg-bot-token", type=str, default=os.environ.get("TG_BOT_TOKEN") or os.environ.get("TELEGRAM_API_ID") or os.environ.get("TELEGRAM_BOT_TOKEN"))
     parser.add_argument("--tg-chat-id", type=str, default=os.environ.get("TG_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID"))
     parser.add_argument("--prompt-file", type=str, help="Custom prompt file")
     parser.add_argument("--think", type=str, choices=["normal", "think", "megathink", "ultrathink"],
