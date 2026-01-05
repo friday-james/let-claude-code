@@ -1000,6 +1000,7 @@ class AutoReviewer:
         create_pr: bool = False,
         work_branch: str | None = None,
         claude_flags: str | None = None,
+        auto_yes: bool = False,
     ) -> None:
         self.project_dir = Path(project_dir).resolve()
         self.auto_merge = auto_merge
@@ -1019,6 +1020,7 @@ class AutoReviewer:
         self.claude_flags = claude_flags  # Additional flags to pass to Claude CLI
         self.sessions_file = self.project_dir / ".cook_sessions.json"
         self.use_gemini = False  # Enable auto-answering Claude questions via Gemini
+        self.auto_yes = auto_yes  # Skip confirmation prompts
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -1145,6 +1147,7 @@ class AutoReviewer:
         """Send a question to Gemini and get an answer."""
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
+            self.log("Gemini API key not found in environment")
             return None
 
         try:
@@ -1185,12 +1188,23 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                 result = json.loads(response.read().decode('utf-8'))
 
                 if result.get("candidates"):
-                    return result["candidates"][0]["content"]["parts"][0]["text"]
+                    answer = result["candidates"][0]["content"]["parts"][0]["text"]
+                    self.log(f"Gemini answered: {answer[:100]}...")
+                    return answer
+                else:
+                    self.log(f"Gemini response had no candidates: {result}")
+                    return None
 
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode('utf-8') if e.fp else ""
+            self.log(f"Gemini HTTP {e.code} error: {error_body[:200]}")
+            return None
+        except urllib.error.URLError as e:
+            self.log(f"Gemini URL error: {e.reason}")
+            return None
         except Exception as e:
-            self.log(f"Gemini API error: {e}")
-
-        return None
+            self.log(f"Gemini API error: {type(e).__name__}: {e}")
+            return None
 
     def detect_question(self, text: str) -> bool:
         """Detect if text contains a question Claude is asking the user."""
@@ -1283,6 +1297,8 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
         import tempfile
         import json
 
+        self.log(f"run_claude called with prompt length: {len(prompt)}")
+
         # Append thinking keyword if not normal
         if self.think_level != "normal":
             prompt = f"{prompt}\n\n{self.think_level}"
@@ -1308,10 +1324,11 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             atexit.register(cleanup_temp_file)
 
             try:
-                # Build command - use -c to continue session if available
+                # Build command
                 cmd = ["claude", "--print", "--output-format", "stream-json", "--verbose"]
                 if self.session_id:
                     cmd.extend(["--resume", self.session_id])
+
                 # Add any additional claude flags specified by user
                 if self.claude_flags:
                     # Expand ~ in arguments
@@ -1320,7 +1337,14 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         expanded_flags.append(os.path.expanduser(flag))
                     cmd.extend(expanded_flags)
 
-                # Run claude with prompt via stdin (avoids command line length limits)
+                # For new sessions (not resumed), add the prompt as last argument
+                if not self.session_id:
+                    cmd.append(prompt)
+
+                # Debug: print command being run
+                self.log(f"Running command: {' '.join(cmd[:5])}... (prompt length: {len(prompt) if not self.session_id else 'N/A (resumed)'})")
+
+                # Run claude - keep stdin open for potential input_required responses
                 process = subprocess.Popen(
                     cmd,
                     cwd=self.project_dir,
@@ -1330,9 +1354,13 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                     text=True,
                 )
 
-                # Send prompt via stdin
-                process.stdin.write(prompt)
-                process.stdin.flush()
+                # Close stdin if we're not using Gemini (no need to keep it open for answers)
+                # When prompt is passed as argument, Claude doesn't need stdin
+                if not self.use_gemini and not self.session_id:
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
 
                 result_data = {}
                 start_time = time.time()
@@ -1358,23 +1386,29 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         data = json.loads(line)
                         msg_type = data.get("type", "")
 
-                        # Handle user input requests from Claude (only when use_gemini is enabled)
-                        if msg_type == "input_required" and self.use_gemini:
+                        # Handle user input requests from Claude
+                        if msg_type == "input_required":
                             question_text = data.get("message", {}).get("text", "") or data.get("description", "")
                             print(f"\n\033[93m🤖 Claude asking: {question_text[:100]}...\033[0m")
-                            self.telegram.send(f"🤖 *Claude asking:*\n_{question_text[:200]}_")
 
-                            # Ask Gemini
-                            answer = self.ask_gemini(question_text, f"Project: {self.project_dir}")
-                            if answer:
-                                print("\n\033[92m✨ Gemini answered\033[0m")
-                                self.telegram.send("✨ *Gemini auto-answered*")
-                                process.stdin.write(answer + "\n")
-                                process.stdin.flush()
+                            if self.use_gemini:
+                                self.telegram.send(f"🤖 *Claude asking:*\n_{question_text[:200]}_")
+                                # Ask Gemini
+                                answer = self.ask_gemini(question_text, f"Project: {self.project_dir}")
+                                if answer:
+                                    print("\n\033[92m✨ Gemini answered\033[0m")
+                                    self.telegram.send("✨ *Gemini auto-answered*")
+                                    process.stdin.write(answer + "\n")
+                                    process.stdin.flush()
+                                else:
+                                    # Gemini failed, use default "y" to proceed
+                                    print("\n\033[91m⚠️ Gemini failed, proceeding with 'y'\033[0m")
+                                    self.telegram.send("⚠️ *Gemini failed, proceeding with 'y'*")
+                                    process.stdin.write("y\n")
+                                    process.stdin.flush()
                             else:
-                                # Gemini failed, use default "y" to proceed
-                                print("\n\033[91mGemini failed, proceeding with 'y'\033[0m")
-                                self.telegram.send("⚠️ *Gemini failed, proceeding with 'y'*")
+                                # Gemini not enabled, auto-proceed with 'y'
+                                print("\n\033[90m→ Auto-answering 'y'\033[0m")
                                 process.stdin.write("y\n")
                                 process.stdin.flush()
 
@@ -1537,21 +1571,33 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
         if self.lock_file.path.exists():
             self.log(f"Found stale lock file: {self.lock_file.path}")
             print(f"\n⚠️  Found stale lock file: {self.lock_file.path}")
-            try:
-                response = input("Remove lock file and continue? [y/N]: ").strip().lower()
-                if response in ('y', 'yes'):
-                    try:
-                        self.lock_file.path.unlink()
-                        self.log("Lock file removed")
-                    except OSError as e:
-                        self.log(f"Failed to remove lock file: {e}")
-                        return False
-                else:
-                    self.log("Skipping")
+
+            if self.auto_yes:
+                # Auto-remove with --yes flag
+                try:
+                    self.lock_file.path.unlink()
+                    self.log("Lock file removed (auto-yes)")
+                    print("Lock file removed (auto-yes)")
+                except OSError as e:
+                    self.log(f"Failed to remove lock file: {e}")
                     return False
-            except (EOFError, KeyboardInterrupt):
-                print("\nAborted")
-                return False
+            else:
+                # Prompt user
+                try:
+                    response = input("Remove lock file and continue? [y/N]: ").strip().lower()
+                    if response in ('y', 'yes'):
+                        try:
+                            self.lock_file.path.unlink()
+                            self.log("Lock file removed")
+                        except OSError as e:
+                            self.log(f"Failed to remove lock file: {e}")
+                            return False
+                    else:
+                        self.log("Skipping")
+                        return False
+                except (EOFError, KeyboardInterrupt):
+                    print("\nAborted")
+                    return False
 
         if not self.lock_file.acquire():
             self.log("Another review is already running, skipping")
@@ -1581,7 +1627,9 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             # Default: just run on the current branch without creating a new one
             if not self.create_pr:
                 self.log("Running in no-PR mode (commits only)...")
+                self.log("About to call run_claude...")
                 success, summary = self.run_claude(self.review_prompt, timeout=3600)
+                self.log(f"run_claude returned: success={success}")
                 if not success:
                     self.telegram.send("⚠️ *Auto-Review Failed*\n\nClaude failed.")
                     return False
@@ -1666,8 +1714,19 @@ def run_loop(reviewer: AutoReviewer):
         print(f"\n{'='*60}")
         print(f"Starting run #{run_count}")
         print(f"{'='*60}\n")
+
+        start_time = time.time()
         reviewer.run_once()
-        print(f"\nRun #{run_count} complete. Starting next run immediately...")
+        duration = time.time() - start_time
+
+        # If run completed very quickly (< 30s), it likely failed or exited early
+        # Add a delay to avoid rapid re-runs
+        if duration < 30:
+            delay = 10  # 10 second delay
+            print(f"\n⚠️  Run completed quickly ({duration:.1f}s). Waiting {delay}s before next run...")
+            time.sleep(delay)
+        else:
+            print(f"\nRun #{run_count} complete (took {duration:.1f}s). Starting next run immediately...")
 
 
 def run_with_interval(reviewer: AutoReviewer, interval: int):
@@ -1974,6 +2033,7 @@ def main():
         create_pr=bool(args.create_pr),
         work_branch=args.branch,
         claude_flags=args.claude,
+        auto_yes=args.yes,
     )
 
     # Enable Gemini auto-answer if requested
