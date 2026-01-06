@@ -17,6 +17,7 @@ import argparse
 import fcntl
 import json
 import os
+import pty
 import random
 import re
 import string
@@ -1461,25 +1462,29 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         expanded_flags.append(os.path.expanduser(flag))
                     base_cmd += " " + " ".join(expanded_flags)
 
-                # Run claude directly - stdin will be passed via Popen
                 cmd = ["bash", "-c", base_cmd]
 
-                # Run claude with stdin pipe for prompt
+                # Use PTY to allow writing prompt AND additional answers
+                # PTY master allows us to write input after stdin is closed
+                master_fd, slave_fd = pty.openpty()
+
                 process = subprocess.Popen(
                     cmd,
                     cwd=self.project_dir,
-                    stdin=subprocess.PIPE,
+                    stdin=slave_fd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    text=True,
                 )
 
-                # Write prompt to stdin
+                # Write prompt to PTY master
                 try:
-                    process.stdin.write(prompt)
-                    process.stdin.flush()
-                    # Don't close stdin yet - we may need to write answers later
-                    # Claude should be able to read the prompt without EOF
+                    fcntl.fcntl(master_fd, fcntl.F_SETFL, 0)
+                except (OSError, IOError):
+                    pass
+
+                try:
+                    os.write(master_fd, prompt.encode('utf-8'))
+                    os.write(master_fd, b"\n")
                 except (BrokenPipeError, OSError) as e:
                     self.log(f"Failed to write prompt: {e}")
 
@@ -1516,12 +1521,7 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                             question_text = data.get("message", {}).get("text", "") or data.get("description", "")
                             print(f"\n\033[93m🤖 Claude asking: {question_text[:100]}...\033[0m")
 
-                            # Write answer to stdin pipe
-                            if process.stdin.closed:
-                                self.log("Warning: input_required received but stdin is closed")
-                                print("\n\033[91m⚠️ Cannot answer - stdin closed\033[0m")
-                                continue
-
+                            # Write answer to PTY master
                             if self.use_ai:
                                 self.telegram.send(f"🤖 *Claude asking:*\n_{question_text[:200]}_")
 
@@ -1539,8 +1539,7 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                                     print("\n\033[92m✨ AI answered\033[0m")
                                     self.telegram.send("✨ *AI auto-answered*")
                                     try:
-                                        process.stdin.write(answer + "\n")
-                                        process.stdin.flush()
+                                        os.write(master_fd, (answer + "\n").encode('utf-8'))
                                     except (BrokenPipeError, OSError) as e:
                                         self.log(f"Failed to send answer: {e}")
                                 else:
@@ -1548,16 +1547,14 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                                     print("\n\033[91m⚠️ AI failed, proceeding with 'y'\033[0m")
                                     self.telegram.send("⚠️ *AI failed, proceeding with 'y'*")
                                     try:
-                                        process.stdin.write("y\n")
-                                        process.stdin.flush()
+                                        os.write(master_fd, b"y\n")
                                     except (BrokenPipeError, OSError) as e:
                                         self.log(f"Failed to send fallback answer: {e}")
                             else:
                                 # Auto-proceed with 'y'
                                 print("\n\033[90m→ Auto-answering 'y'\033[0m")
                                 try:
-                                    process.stdin.write("y\n")
-                                    process.stdin.flush()
+                                    os.write(master_fd, b"y\n")
                                 except (BrokenPipeError, OSError) as e:
                                     self.log(f"Failed to send answer: {e}")
 
@@ -1626,13 +1623,6 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                     print("💡 Check quota: run 'claude' then type '/usage'")
                     print(f"{'─'*60}\n")
 
-                # Close stdin if still open (after potential AI answers)
-                try:
-                    if process.stdin and not process.stdin.closed:
-                        process.stdin.close()
-                except OSError:
-                    pass
-
                 # Get summary from git log
                 if success:
                     _, log_output = self.run_cmd(["git", "log", "--oneline", f"{self.base_branch}..HEAD"])
@@ -1646,6 +1636,18 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                 if prompt_file and os.path.exists(prompt_file):
                     os.unlink(prompt_file)
                 atexit.unregister(cleanup_temp_file)
+
+                # Close PTY file descriptors
+                try:
+                    if 'master_fd' in dir() and master_fd >= 0:
+                        os.close(master_fd)
+                except OSError:
+                    pass
+                try:
+                    if 'slave_fd' in dir() and slave_fd >= 0:
+                        os.close(slave_fd)
+                except OSError:
+                    pass
 
         except FileNotFoundError:
             return False, "Claude CLI not found"
