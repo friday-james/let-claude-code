@@ -15,12 +15,12 @@ You: *reviews the changes*
 
 **Our Solution**: Full autonomy.
 
-- **🤖 AI Auto-Answer**: Claude asks a question? GPT-5.2 or Gemini 3 Pro answers it instantly.
+- **🤖 AI Auto-Answer**: Claude asks a question? AI answers it instantly. Choose from cost-effective to premium models.
 - **⚡ Permission Bypass**: Configured once, runs forever without prompts.
 - **🔄 Loop & Schedule**: Run continuously or on cron. Walk away. Come back to improvements.
 - **🚀 PR Automation**: Creates branches, opens PRs, reviews them, merges approved ones.
 
-**The result?** Claude Code becomes a true autonomous agent that improves your codebase 24/7 without human intervention.
+**The result?** Claude Code becomes a true autonomous agent that improves your codebase 24/7 without human intervention—at a cost you control.
 
 ---
 
@@ -279,15 +279,15 @@ cook --loop --create-pr
 
 ## AI Auto-Answer
 
-When Claude asks questions during automation, let GPT-5.2 or Gemini 3 Pro answer them automatically with maximum reasoning.
+When Claude asks questions during automation, let AI answer them automatically. Choose from cost-effective to premium models.
 
 **Setup:**
 
 ```bash
-# Option 1: Use GPT-5.2 (OpenAI - preferred)
+# Option 1: OpenAI (GPT models)
 export OPENAI_API_KEY=sk-...
 
-# Option 2: Use Gemini 3 Pro (Google - fallback)
+# Option 2: Google (Gemini models)
 export GEMINI_API_KEY=...
 
 # Or add to .env file
@@ -298,13 +298,18 @@ echo "GEMINI_API_KEY=..." >> .env
 **Usage:**
 
 ```bash
-# Run with AI auto-answer enabled (auto-selects model)
-cook --loop -m fix_bugs --auto-gemini-answer -y
+# Run with AI auto-answer (uses cost-effective defaults)
+cook --loop -m fix_bugs --auto-answer -y
 
-# Use specific AI model
-cook --loop --auto-gemini-answer --ai-model gpt-5    # Force GPT-5.2
-cook --loop --auto-gemini-answer --ai-model gemini   # Force Gemini 3 Pro
-cook --loop --auto-gemini-answer --ai-model auto     # Auto (default)
+# Choose specific model
+cook --loop --auto-answer --ai-model gpt-4o-mini      # Cheapest OpenAI
+cook --loop --auto-answer --ai-model gpt-4o           # Balanced
+cook --loop --auto-answer --ai-model gpt-5.2          # Premium reasoning
+cook --loop --auto-answer --ai-model gemini-1.5-flash # Cheapest Gemini
+cook --loop --auto-answer --ai-model gemini-1.5-pro   # Balanced Gemini
+
+# Auto mode (default) - uses gpt-4o-mini or gemini-1.5-flash
+cook --loop --auto-answer
 
 # YOLO mode (includes auto-answer)
 cook --yolo -m improve_code
@@ -313,20 +318,34 @@ cook --yolo -m improve_code
 **How it works:**
 
 1. Claude encounters a question (e.g., "Should I create a new file or edit existing?")
-2. Automator sends question + project context to GPT-5.2 (or Gemini 3 Pro as fallback)
-3. AI reasons through the question with maximum reasoning effort
+2. Automator sends question + recent conversation context to AI
+3. AI reasons through the question and provides an answer
 4. Answer is sent back to Claude automatically
 5. Claude continues without human intervention
 
-**AI Models:**
+**Available Models:**
 
-| Model | Provider | Reasoning | Max Output | Priority |
-|:------|:---------|:----------|:-----------|:---------|
-| GPT-5.2 | OpenAI | xhigh (maximum) | 65,536 tokens | 1st |
-| Gemini 3 Pro | Google | Advanced | 65,536 tokens | 2nd (fallback) |
+| Model | Provider | Cost | Speed | Best For |
+|:------|:---------|:-----|:------|:---------|
+| `gpt-4o-mini` | OpenAI | $ | Fast | Default - great balance of cost/quality |
+| `gpt-4o` | OpenAI | $$ | Medium | More complex decisions |
+| `gpt-5.2` | OpenAI | $$$ | Slow | Maximum reasoning for critical decisions |
+| `gemini-1.5-flash` | Google | $ | Fast | Default - cost-effective fallback |
+| `gemini-1.5-pro` | Google | $$ | Medium | More complex reasoning |
+| `gemini-3-pro-preview` | Google | $$$ | Slow | Premium Google model |
+
+**Cost Comparison:**
+
+- **gpt-4o-mini**: ~$0.15 per 1M input tokens, $0.60 per 1M output (cheapest OpenAI)
+- **gpt-4o**: ~$2.50 per 1M input tokens, $10 per 1M output
+- **gpt-5.2**: ~$10 per 1M input tokens, $40 per 1M output (premium reasoning)
+- **gemini-1.5-flash**: ~$0.075 per 1M input tokens, $0.30 per 1M output (cheapest)
+- **gemini-1.5-pro**: ~$1.25 per 1M input tokens, $5 per 1M output
+
+💡 **Tip:** Start with `auto` mode (default) for cost-effective operation. Upgrade to premium models only when needed.
 
 **Get API Keys:**
-- GPT-5: https://platform.openai.com/api-keys
+- OpenAI: https://platform.openai.com/api-keys
 - Gemini: https://aistudio.google.com/app/apikey
 
 ---
@@ -369,8 +388,8 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 | `--max-iterations N` | Max review-fix rounds (default: `3`) |
 | `-y, --yes` | Skip confirmation prompt |
 | `--think LEVEL` | Thinking budget: `normal`, `think`, `megathink`, `ultrathink` |
-| `--auto-gemini-answer` | Auto-answer Claude's questions with AI (GPT-5.2 or Gemini 3 Pro) |
-| `--ai-model MODEL` | AI model to use: `auto` (default), `gpt-5`, `gemini` |
+| `--auto-answer` | Auto-answer Claude's questions with AI (requires API key) |
+| `--ai-model MODEL` | AI model: `auto`, `gpt-4o-mini`, `gpt-4o`, `gpt-5.2`, `gemini-1.5-flash`, `gemini-1.5-pro`, `gemini-3-pro-preview` |
 | `--claude "FLAGS"` | Additional flags to pass to Claude CLI |
 | `--resume` | Resume from a previous session |
 | `--clear-sessions` | Clear all saved sessions |

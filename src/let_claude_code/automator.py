@@ -1019,8 +1019,8 @@ class AutoReviewer:
         self.work_branch = work_branch  # If set, checkout to this branch before working
         self.claude_flags = claude_flags  # Additional flags to pass to Claude CLI
         self.sessions_file = self.project_dir / ".cook_sessions.json"
-        self.use_gemini = False  # Enable auto-answering Claude questions via AI
-        self.ai_model = "auto"  # Which AI model to use: auto, gpt-5, gemini
+        self.use_ai = False  # Enable auto-answering Claude questions via AI
+        self.ai_model = "auto"  # Which AI model to use: auto, gpt-4o-mini, gemini-1.5-flash, etc.
         self.auto_yes = auto_yes  # Skip confirmation prompts
 
     def get_mode_names(self) -> str:
@@ -1145,36 +1145,37 @@ class AutoReviewer:
     # ============================================================================
 
     def ask_ai(self, question: str, context: str = "") -> str | None:
-        """Send a question to AI (Gemini or GPT-5) and get an answer."""
-        # If user specified a specific model, use that
-        if self.ai_model == "gpt-5":
+        """Send a question to AI and get an answer."""
+        # Determine which model to use
+        model = self.ai_model
+
+        # Auto mode: use cost-effective defaults
+        if model == "auto":
             if os.environ.get("OPENAI_API_KEY"):
-                return self.ask_gpt5(question, context)
+                model = "gpt-4o-mini"  # Cost-effective default
+            elif os.environ.get("GEMINI_API_KEY"):
+                model = "gemini-1.5-flash"  # Cost-effective default
             else:
-                self.log("GPT-5 requested but no OPENAI_API_KEY found")
-                return None
-        elif self.ai_model == "gemini":
-            if os.environ.get("GEMINI_API_KEY"):
-                return self.ask_gemini(question, context)
-            else:
-                self.log("Gemini requested but no GEMINI_API_KEY found")
+                self.log("No AI API keys found (OPENAI_API_KEY or GEMINI_API_KEY)")
                 return None
 
-        # Auto mode: Try GPT-5 first if API key is available
-        if os.environ.get("OPENAI_API_KEY"):
-            answer = self.ask_gpt5(question, context)
-            if answer:
-                return answer
+        # Route to appropriate provider
+        if model.startswith("gpt-") or model.startswith("o1"):
+            if not os.environ.get("OPENAI_API_KEY"):
+                self.log(f"{model} requested but no OPENAI_API_KEY found")
+                return None
+            return self.ask_openai(question, context, model)
+        elif model.startswith("gemini-"):
+            if not os.environ.get("GEMINI_API_KEY"):
+                self.log(f"{model} requested but no GEMINI_API_KEY found")
+                return None
+            return self.ask_gemini(question, context, model)
+        else:
+            self.log(f"Unknown AI model: {model}")
+            return None
 
-        # Fall back to Gemini
-        if os.environ.get("GEMINI_API_KEY"):
-            return self.ask_gemini(question, context)
-
-        self.log("No AI API keys found (OPENAI_API_KEY or GEMINI_API_KEY)")
-        return None
-
-    def ask_gpt5(self, question: str, context: str = "") -> str | None:
-        """Send a question to GPT-5.2 and get an answer with max reasoning."""
+    def ask_openai(self, question: str, context: str = "", model: str = "gpt-4o-mini") -> str | None:
+        """Send a question to OpenAI and get an answer."""
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             return None
@@ -1183,8 +1184,6 @@ class AutoReviewer:
             import urllib.request
             import urllib.error
             import json
-
-            url = "https://api.openai.com/v1/responses"
 
             prompt = f"""You are helping an AI coding assistant (Claude) answer a question.
 
@@ -1196,17 +1195,31 @@ Question from Claude:
 
 Provide a clear, direct answer that Claude can use. Be concise but thorough."""
 
-            data = {
-                "model": "gpt-5.2",
-                "input": prompt,
-                "reasoning": {
-                    "effort": "xhigh"  # Maximum reasoning effort
-                },
-                "text": {
-                    "verbosity": "medium"
-                },
-                "max_output_tokens": 65536  # Maximum output tokens
-            }
+            # Use GPT-5.2 Responses API for GPT-5.2
+            if model == "gpt-5.2":
+                url = "https://api.openai.com/v1/responses"
+                data = {
+                    "model": model,
+                    "input": prompt,
+                    "reasoning": {
+                        "effort": "xhigh"  # Maximum reasoning effort
+                    },
+                    "text": {
+                        "verbosity": "medium"
+                    },
+                    "max_output_tokens": 65536
+                }
+            # Use Chat Completions API for other models
+            else:
+                url = "https://api.openai.com/v1/chat/completions"
+                data = {
+                    "model": model,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 4096 if model == "gpt-4o-mini" else 16384
+                }
 
             data_str = json.dumps(data).encode('utf-8')
 
@@ -1223,28 +1236,34 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             with urllib.request.urlopen(req, timeout=60) as response:
                 result = json.loads(response.read().decode('utf-8'))
 
-                # Extract text from GPT-5 response
-                if result.get("output"):
-                    answer = result["output"]
-                    self.log(f"GPT-5 answered: {answer[:100]}...")
-                    return answer
+                # Extract text based on API type
+                if model == "gpt-5.2":
+                    if result.get("output"):
+                        answer = result["output"]
+                        self.log(f"{model} answered: {answer[:100]}...")
+                        return answer
                 else:
-                    self.log(f"GPT-5 response had no output: {result}")
-                    return None
+                    if result.get("choices") and len(result["choices"]) > 0:
+                        answer = result["choices"][0]["message"]["content"]
+                        self.log(f"{model} answered: {answer[:100]}...")
+                        return answer
+
+                self.log(f"{model} response had no output: {result}")
+                return None
 
         except urllib.error.HTTPError as e:
             error_body = e.read().decode('utf-8') if e.fp else ""
-            self.log(f"GPT-5 HTTP {e.code} error: {error_body[:200]}")
+            self.log(f"{model} HTTP {e.code} error: {error_body[:200]}")
             return None
         except urllib.error.URLError as e:
-            self.log(f"GPT-5 URL error: {e.reason}")
+            self.log(f"{model} URL error: {e.reason}")
             return None
         except Exception as e:
-            self.log(f"GPT-5 API error: {type(e).__name__}: {e}")
+            self.log(f"{model} API error: {type(e).__name__}: {e}")
             return None
 
-    def ask_gemini(self, question: str, context: str = "") -> str | None:
-        """Send a question to Gemini 3 Pro and get an answer with max reasoning."""
+    def ask_gemini(self, question: str, context: str = "", model: str = "gemini-1.5-flash") -> str | None:
+        """Send a question to Gemini and get an answer."""
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             return None
@@ -1254,8 +1273,7 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             import urllib.error
             import json
 
-            # Use Gemini 3 Pro Preview - the latest and most capable model
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={api_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
             prompt = f"""You are helping an AI coding assistant (Claude) answer a question.
 
@@ -1267,11 +1285,19 @@ Question from Claude:
 
 Provide a clear, direct answer that Claude can use. Be concise but thorough."""
 
+            # Set max tokens based on model
+            if "flash" in model:
+                max_tokens = 8192
+            elif "1.5" in model:
+                max_tokens = 8192
+            else:  # gemini-3-pro
+                max_tokens = 65536
+
             data = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
                     "temperature": 0.2,
-                    "maxOutputTokens": 65536,  # Maximum output tokens
+                    "maxOutputTokens": max_tokens,
                 }
             }
 
@@ -1289,21 +1315,21 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
 
                 if result.get("candidates"):
                     answer = result["candidates"][0]["content"]["parts"][0]["text"]
-                    self.log(f"Gemini 3 Pro answered: {answer[:100]}...")
+                    self.log(f"{model} answered: {answer[:100]}...")
                     return answer
                 else:
-                    self.log(f"Gemini response had no candidates: {result}")
+                    self.log(f"{model} response had no candidates: {result}")
                     return None
 
         except urllib.error.HTTPError as e:
             error_body = e.read().decode('utf-8') if e.fp else ""
-            self.log(f"Gemini HTTP {e.code} error: {error_body[:200]}")
+            self.log(f"{model} HTTP {e.code} error: {error_body[:200]}")
             return None
         except urllib.error.URLError as e:
-            self.log(f"Gemini URL error: {e.reason}")
+            self.log(f"{model} URL error: {e.reason}")
             return None
         except Exception as e:
-            self.log(f"Gemini API error: {type(e).__name__}: {e}")
+            self.log(f"{model} API error: {type(e).__name__}: {e}")
             return None
 
     def detect_question(self, text: str) -> bool:
@@ -1498,7 +1524,7 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                                 print("\n\033[91m⚠️ Cannot answer - stdin closed\033[0m")
                                 continue
 
-                            if self.use_gemini:
+                            if self.use_ai:
                                 self.telegram.send(f"🤖 *Claude asking:*\n_{question_text[:200]}_")
 
                                 # Build context from recent conversation
@@ -1934,10 +1960,10 @@ def main():
                         help="Show session selection menu to resume a previous session")
     parser.add_argument("--clear-sessions", action="store_true",
                         help="Clear all saved sessions and exit")
-    parser.add_argument("--auto-gemini-answer", action="store_true",
-                        help="Auto-answer Claude's questions using AI (GPT-5.2 or Gemini 3 Pro). Requires OPENAI_API_KEY or GEMINI_API_KEY env var")
-    parser.add_argument("--ai-model", type=str, choices=["auto", "gpt-5", "gemini"],
-                        default="auto", help="AI model to use for auto-answering (default: auto - tries GPT-5 first, then Gemini)")
+    parser.add_argument("--auto-answer", action="store_true",
+                        help="Auto-answer Claude's questions using AI. Requires OPENAI_API_KEY or GEMINI_API_KEY env var")
+    parser.add_argument("--ai-model", type=str, default="auto",
+                        help="AI model to use: auto (default: gpt-4o-mini or gemini-1.5-flash), gpt-4o-mini, gpt-4o, gpt-5.2, gemini-1.5-flash, gemini-1.5-pro, gemini-3-pro-preview")
 
     args = parser.parse_args()
 
@@ -2067,50 +2093,52 @@ def main():
             print("\nProceeding anyway (--yes flag set)")
             print("Note: Claude may prompt for permissions during execution.\n")
 
-    # Check for AI API keys if --auto-gemini-answer is requested
-    use_gemini = False
-    if args.auto_gemini_answer:
+    # Check for AI API keys if --auto-answer is requested
+    use_ai = False
+    if args.auto_answer:
         openai_key = os.environ.get("OPENAI_API_KEY")
         gemini_key = os.environ.get("GEMINI_API_KEY")
 
         if openai_key or gemini_key:
-            use_gemini = True
-            model_mode = args.ai_model
-            if model_mode == "auto":
+            use_ai = True
+            model = args.ai_model
+            if model == "auto":
+                default_model = "gpt-4o-mini" if openai_key else "gemini-1.5-flash"
+                print(f"✓ AI auto-answer enabled (using {default_model})")
+                if openai_key and gemini_key:
+                    print("  Both OpenAI and Gemini keys found - will fall back if primary fails")
+            elif model.startswith("gpt-") or model.startswith("o1"):
                 if openai_key:
-                    print("✓ OpenAI API key found (GPT-5.2 will be used)")
-                if gemini_key:
-                    print("✓ Gemini API key found (Gemini 3 Pro will be used as fallback)")
-            elif model_mode == "gpt-5":
-                if openai_key:
-                    print("✓ AI model: GPT-5.2 (OpenAI)")
+                    print(f"✓ AI model: {model} (OpenAI)")
                 else:
-                    print("⚠️  GPT-5 selected but OPENAI_API_KEY not found")
-            elif model_mode == "gemini":
+                    print(f"⚠️  {model} selected but OPENAI_API_KEY not found")
+                    use_ai = False
+            elif model.startswith("gemini-"):
                 if gemini_key:
-                    print("✓ AI model: Gemini 3 Pro")
+                    print(f"✓ AI model: {model} (Google)")
                 else:
-                    print("⚠️  Gemini selected but GEMINI_API_KEY not found")
+                    print(f"⚠️  {model} selected but GEMINI_API_KEY not found")
+                    use_ai = False
         else:
             print("\n" + "=" * 60)
             print("🤖 AI Auto-Answer requested")
             print("=" * 60)
-            print("To use --auto-gemini-answer, you need either:")
-            print("  • OpenAI API key (for GPT-5.2) - https://platform.openai.com/api-keys")
-            print("  • Gemini API key (for Gemini 3 Pro) - https://aistudio.google.com/app/apikey")
+            print("To use --auto-answer, you need either:")
+            print("  • OpenAI API key - https://platform.openai.com/api-keys")
+            print("  • Gemini API key - https://aistudio.google.com/app/apikey")
             try:
                 choice = input("\nEnter API key type [openai/gemini] (or press Enter to skip): ").strip().lower()
                 if choice == "openai":
                     api_key = input("Enter your OpenAI API key: ").strip()
                     if api_key:
                         os.environ["OPENAI_API_KEY"] = api_key
-                        use_gemini = True
+                        use_ai = True
                         print("✓ OpenAI API key set")
                 elif choice == "gemini":
                     api_key = input("Enter your Gemini API key: ").strip()
                     if api_key:
                         os.environ["GEMINI_API_KEY"] = api_key
-                        use_gemini = True
+                        use_ai = True
                         print("✓ Gemini API key set")
                 else:
                     print("Skipping AI auto-answer.")
@@ -2202,8 +2230,8 @@ def main():
     )
 
     # Enable AI auto-answer if requested
-    if use_gemini:
-        reviewer.use_gemini = True
+    if use_ai:
+        reviewer.use_ai = True
         reviewer.ai_model = args.ai_model
 
     # If resuming a session, set the session_id
