@@ -9,6 +9,19 @@ Claude: *commits directly to your branch*
 You: *reviews the changes*
 ```
 
+## The Fundamental Flaw (And How We Fix It)
+
+**Claude Code's Problem**: It's interactive. It stops and asks you questions. It waits for permission. It can't run unattended.
+
+**Our Solution**: Full autonomy.
+
+- **🤖 AI Auto-Answer**: Claude asks a question? GPT-5.2 or Gemini 3 Pro answers it instantly.
+- **⚡ Permission Bypass**: Configured once, runs forever without prompts.
+- **🔄 Loop & Schedule**: Run continuously or on cron. Walk away. Come back to improvements.
+- **🚀 PR Automation**: Creates branches, opens PRs, reviews them, merges approved ones.
+
+**The result?** Claude Code becomes a true autonomous agent that improves your codebase 24/7 without human intervention.
+
 ---
 
 ## Install
@@ -264,6 +277,55 @@ cook --loop --create-pr
 
 ---
 
+## AI Auto-Answer
+
+When Claude asks questions during automation, let GPT-5.2 or Gemini 3 Pro answer them automatically with maximum reasoning.
+
+**Setup:**
+
+```bash
+# Option 1: Use GPT-5.2 (OpenAI - preferred)
+export OPENAI_API_KEY=sk-...
+
+# Option 2: Use Gemini 3 Pro (Google - fallback)
+export GEMINI_API_KEY=...
+
+# Or add to .env file
+echo "OPENAI_API_KEY=sk-..." >> .env
+echo "GEMINI_API_KEY=..." >> .env
+```
+
+**Usage:**
+
+```bash
+# Run with AI auto-answer enabled
+cook --loop -m fix_bugs --auto-gemini-answer -y
+
+# YOLO mode (includes auto-answer)
+cook --yolo -m improve_code
+```
+
+**How it works:**
+
+1. Claude encounters a question (e.g., "Should I create a new file or edit existing?")
+2. Automator sends question + project context to GPT-5.2 (or Gemini 3 Pro as fallback)
+3. AI reasons through the question with maximum reasoning effort
+4. Answer is sent back to Claude automatically
+5. Claude continues without human intervention
+
+**AI Models:**
+
+| Model | Provider | Reasoning | Max Output | Priority |
+|:------|:---------|:----------|:-----------|:---------|
+| GPT-5.2 | OpenAI | xhigh (maximum) | 65,536 tokens | 1st |
+| Gemini 3 Pro | Google | Advanced | 65,536 tokens | 2nd (fallback) |
+
+**Get API Keys:**
+- GPT-5: https://platform.openai.com/api-keys
+- Gemini: https://aistudio.google.com/app/apikey
+
+---
+
 ## Usage Tracking
 
 After each run, you see:
@@ -302,6 +364,10 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 | `--max-iterations N` | Max review-fix rounds (default: `3`) |
 | `-y, --yes` | Skip confirmation prompt |
 | `--think LEVEL` | Thinking budget: `normal`, `think`, `megathink`, `ultrathink` |
+| `--auto-gemini-answer` | Auto-answer Claude's questions with AI (GPT-5.2 or Gemini 3 Pro) |
+| `--claude "FLAGS"` | Additional flags to pass to Claude CLI |
+| `--resume` | Resume from a previous session |
+| `--clear-sessions` | Clear all saved sessions |
 
 ---
 
