@@ -17,7 +17,6 @@ import argparse
 import fcntl
 import json
 import os
-import pty
 import random
 import re
 import string
@@ -1450,7 +1449,7 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             atexit.register(cleanup_temp_file)
 
             try:
-                # Build command - no stdin redirection in the command itself
+                # Build command - use file redirection for prompt
                 base_cmd = "claude --print --output-format stream-json --verbose"
                 if self.session_id:
                     base_cmd += f" --resume {self.session_id}"
@@ -1462,31 +1461,25 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         expanded_flags.append(os.path.expanduser(flag))
                     base_cmd += " " + " ".join(expanded_flags)
 
-                cmd = ["bash", "-c", base_cmd]
+                # Pass prompt via file redirection
+                cmd = ["bash", "-c", f"{base_cmd} < '{prompt_file}'"]
 
-                # Use PTY to allow writing prompt AND additional answers
-                # PTY master allows us to write input after stdin is closed
-                master_fd, slave_fd = pty.openpty()
+                # Run claude with stdin from /dev/tty if available (for interactive use)
+                stdin_source = None
+                if os.path.exists("/dev/tty"):
+                    try:
+                        stdin_source = open("/dev/tty", "r")
+                    except OSError:
+                        pass
 
                 process = subprocess.Popen(
                     cmd,
                     cwd=self.project_dir,
-                    stdin=slave_fd,
+                    stdin=stdin_source,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
+                    text=True,
                 )
-
-                # Write prompt to PTY master
-                try:
-                    fcntl.fcntl(master_fd, fcntl.F_SETFL, 0)
-                except (OSError, IOError):
-                    pass
-
-                try:
-                    os.write(master_fd, prompt.encode('utf-8'))
-                    os.write(master_fd, b"\n")
-                except (BrokenPipeError, OSError) as e:
-                    self.log(f"Failed to write prompt: {e}")
 
                 result_data = {}
                 start_time = time.time()
@@ -1517,11 +1510,13 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                         msg_type = data.get("type", "")
 
                         # Handle user input requests from Claude
+                        # Note: With --print mode and bypassPermissions, Claude handles
+                        # tool permissions automatically and doesn't send input_required
                         if msg_type == "input_required":
                             question_text = data.get("message", {}).get("text", "") or data.get("description", "")
                             print(f"\n\033[93m🤖 Claude asking: {question_text[:100]}...\033[0m")
 
-                            # Write answer to PTY master
+                            # With /dev/tty as stdin, user can provide input directly
                             if self.use_ai:
                                 self.telegram.send(f"🤖 *Claude asking:*\n_{question_text[:200]}_")
 
@@ -1533,30 +1528,14 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                                         context_parts.append(f"- {msg[:200]}...")  # Truncate long messages
                                 context = "\n".join(context_parts)
 
-                                # Ask AI (GPT-5 or Gemini) with conversation context
+                                # Ask AI for answer
                                 answer = self.ask_ai(question_text, context)
                                 if answer:
-                                    print("\n\033[92m✨ AI answered\033[0m")
+                                    print("\n\033[92m✨ AI generated answer\033[0m")
                                     self.telegram.send("✨ *AI auto-answered*")
-                                    try:
-                                        os.write(master_fd, (answer + "\n").encode('utf-8'))
-                                    except (BrokenPipeError, OSError) as e:
-                                        self.log(f"Failed to send answer: {e}")
                                 else:
-                                    # AI failed, use default "y" to proceed
-                                    print("\n\033[91m⚠️ AI failed, proceeding with 'y'\033[0m")
-                                    self.telegram.send("⚠️ *AI failed, proceeding with 'y'*")
-                                    try:
-                                        os.write(master_fd, b"y\n")
-                                    except (BrokenPipeError, OSError) as e:
-                                        self.log(f"Failed to send fallback answer: {e}")
-                            else:
-                                # Auto-proceed with 'y'
-                                print("\n\033[90m→ Auto-answering 'y'\033[0m")
-                                try:
-                                    os.write(master_fd, b"y\n")
-                                except (BrokenPipeError, OSError) as e:
-                                    self.log(f"Failed to send answer: {e}")
+                                    print("\n\033[91m⚠️ AI failed to generate answer\033[0m")
+                                    self.telegram.send("⚠️ *AI failed*")
 
                         # Print assistant messages in real-time and capture for context
                         if msg_type == "assistant" and "message" in data:
@@ -1637,17 +1616,12 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                     os.unlink(prompt_file)
                 atexit.unregister(cleanup_temp_file)
 
-                # Close PTY file descriptors
-                try:
-                    if 'master_fd' in dir() and master_fd >= 0:
-                        os.close(master_fd)
-                except OSError:
-                    pass
-                try:
-                    if 'slave_fd' in dir() and slave_fd >= 0:
-                        os.close(slave_fd)
-                except OSError:
-                    pass
+                # Close stdin source if we opened it
+                if 'stdin_source' in dir() and stdin_source and not stdin_source.closed:
+                    try:
+                        stdin_source.close()
+                    except OSError:
+                        pass
 
         except FileNotFoundError:
             return False, "Claude CLI not found"
