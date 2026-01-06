@@ -1777,6 +1777,12 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                     self.telegram.send("✅ *Auto-Review Complete*\n\nCommits made on current branch.")
                 else:
                     self.log("No changes made")
+                    # Check if Claude indicated the goal/task is complete
+                    if "Goal achieved!" in summary or "North Star achieved!" in summary:
+                        self.log("Goal completed - no more work needed")
+                        self.telegram.send("✅ *Auto-Review Complete*\n\nGoal achieved, no more work needed.")
+                        return "completed"  # Special return to signal loop exit
+
                     self.telegram.send("✅ *Auto-Review Complete*\n\nNo changes needed.")
 
                 self.log("Review cycle complete")
@@ -1852,8 +1858,13 @@ def run_loop(reviewer: AutoReviewer):
         print(f"{'='*60}\n")
 
         start_time = time.time()
-        reviewer.run_once()
+        result = reviewer.run_once()
         duration = time.time() - start_time
+
+        # Check if reviewer indicated completion
+        if result == "completed":
+            print("\n✓ Goal achieved! Exiting loop.")
+            break
 
         # If run completed very quickly (< 30s), it likely failed or exited early
         # Add a delay to avoid rapid re-runs
