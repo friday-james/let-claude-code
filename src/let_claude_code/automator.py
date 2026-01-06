@@ -1449,27 +1449,34 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             atexit.register(cleanup_temp_file)
 
             try:
-                # Build command - pass prompt as positional arg to keep stdin free for input
-                cmd = ["claude", "--print", "--output-format", "stream-json", "--verbose"]
+                # Build command - use bash to redirect prompt file to stdin
+                base_cmd = "claude --print --output-format stream-json --verbose"
                 if self.session_id:
-                    cmd.extend(["--resume", self.session_id])
+                    base_cmd += f" --resume {self.session_id}"
 
                 # Add any additional claude flags specified by user
                 if self.claude_flags:
-                    # Expand ~ in arguments
                     expanded_flags = []
                     for flag in self.claude_flags.split():
                         expanded_flags.append(os.path.expanduser(flag))
-                    cmd.extend(expanded_flags)
+                    base_cmd += " " + " ".join(expanded_flags)
 
-                # Pass prompt as final argument (not via stdin) so stdin stays open for input
-                cmd.append(prompt)
+                # Pass prompt via file redirection, keep stdin from tty for user input
+                cmd = ["bash", "-c", f"{base_cmd} < '{prompt_file}'"]
 
-                # Run claude with stdin as pipe so we can write answers during execution
+                # Use /dev/tty for stdin so user can provide input during execution
+                stdin_fd = None
+                if os.path.exists("/dev/tty"):
+                    try:
+                        stdin_fd = open("/dev/tty", "r")
+                    except OSError:
+                        pass
+
+                # Run claude
                 process = subprocess.Popen(
                     cmd,
                     cwd=self.project_dir,
-                    stdin=subprocess.PIPE,
+                    stdin=stdin_fd if stdin_fd else subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -1620,9 +1627,18 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                     print(f"{'─'*60}\n")
 
                 # Close stdin if still open (after potential gemini answers)
+                # Don't close /dev_tty stdin as it might cause issues
                 try:
-                    if not process.stdin.closed:
-                        process.stdin.close()
+                    stdin_fd_num = None
+                    if hasattr(process.stdin, 'fileno'):
+                        try:
+                            stdin_fd_num = process.stdin.fileno()
+                        except (OSError, ValueError):
+                            pass
+                    # Only close if it's not from /dev/tty (fd is usually 0 for tty)
+                    if stdin_fd_num is None or stdin_fd_num != 0:
+                        if not process.stdin.closed:
+                            process.stdin.close()
                 except OSError:
                     pass
 
