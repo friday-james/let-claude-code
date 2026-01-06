@@ -1022,6 +1022,7 @@ class AutoReviewer:
         self.use_ai = False  # Enable auto-answering Claude questions via AI
         self.ai_model = "auto"  # Which AI model to use: auto, gpt-4o-mini, gemini-1.5-flash, etc.
         self.auto_yes = auto_yes  # Skip confirmation prompts
+        self.gemini_feedback: str | None = None  # Feedback from Gemini to incorporate in next iteration
 
     def get_mode_names(self) -> str:
         """Get human-readable names for the configured modes."""
@@ -1602,10 +1603,15 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
                     print("💡 Check quota: run 'claude' then type '/usage'")
                     print(f"{'─'*60}\n")
 
-                # Get summary from git log
+                # Get summary from Claude's actual response
                 if success:
-                    _, log_output = self.run_cmd(["git", "log", "--oneline", f"{self.base_branch}..HEAD"])
-                    summary = f"Changes made:\n{log_output}" if log_output.strip() else "Claude completed"
+                    # Use the last message from conversation_history (Claude's final response)
+                    if conversation_history:
+                        summary = conversation_history[-1]  # Last message is the most recent
+                    else:
+                        # Fallback to git log if no conversation captured
+                        _, log_output = self.run_cmd(["git", "log", "--oneline", f"{self.base_branch}..HEAD"])
+                        summary = f"Changes made:\n{log_output}" if log_output.strip() else "Claude completed"
                 else:
                     summary = "Claude failed"
 
@@ -1765,24 +1771,121 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
             # Default: just run on the current branch without creating a new one
             if not self.create_pr:
                 self.log("Running in no-PR mode (commits only)...")
-                success, summary = self.run_claude(self.review_prompt, timeout=3600)
+
+                # Incorporate Gemini's feedback from previous iteration if available
+                prompt = self.review_prompt
+                if self.gemini_feedback:
+                    prompt = f"""{self.review_prompt}
+
+IMPORTANT - Feedback from AI Consultant (Gemini):
+{self.gemini_feedback}
+
+Please address the above feedback in this iteration."""
+                    self.log(f"Using Gemini feedback: {self.gemini_feedback[:200]}...")
+                    # Clear feedback after using it
+                    self.gemini_feedback = None
+
+                success, summary = self.run_claude(prompt, timeout=3600)
                 if not success:
                     self.telegram.send("⚠️ *Auto-Review Failed*\n\nClaude failed.")
                     return False
 
                 # Check what commits were made
                 _, log_output = self.run_cmd(["git", "log", "--oneline", "-10"])
+                _, diff_stat = self.run_cmd(["git", "diff", "--stat", "HEAD~3..HEAD"])
+
+                # Prepare context for Gemini review
+                gemini_context = f"""Project: {self.project_dir}
+Goal/Task: {self.review_prompt[:500]}
+
+Claude's Summary:
+{summary}
+
+Recent Commits:
+{log_output.strip() if log_output.strip() else 'No commits made'}
+
+Changes:
+{diff_stat.strip() if diff_stat.strip() else 'No changes'}"""
+
+                # Ask Gemini to review what Claude did
+                if self.use_ai:
+                    print("\n\033[95m🔮 Asking Gemini to review Claude's work...\033[0m")
+                    self.telegram.send("🔮 *Gemini reviewing Claude's work...*")
+
+                    gemini_question = """Review what Claude just accomplished.
+
+IMPORTANT:
+- If Claude stated "Goal achieved!" in the summary, trust that assessment
+- If the goal was conversational (greeting, question, clarification) and Claude responded appropriately, the goal IS achieved
+- Only suggest continuing if there's actual development work remaining
+- Check if any commits were made - if no commits and Claude says done, it's likely complete
+
+Respond in this EXACT format:
+GOAL_ACHIEVED: YES or NO
+CONTINUE: YES or NO
+NEXT_FOCUS: (only if CONTINUE is YES, otherwise write "N/A")
+
+Be concise and direct."""
+
+                    gemini_feedback = self.ask_ai(gemini_question, gemini_context)
+
+                    if gemini_feedback:
+                        print(f"\n\033[92m✨ Gemini's Review:\033[0m\n{gemini_feedback}\n")
+                        self.telegram.send(f"✨ *Gemini's Review:*\n{gemini_feedback[:500]}")
+
+                        # Parse the key-value format
+                        goal_achieved = False
+                        should_continue = True
+                        focus_next = None
+
+                        for line in gemini_feedback.split('\n'):
+                            line = line.strip()
+                            if line.startswith('GOAL_ACHIEVED:'):
+                                value = line.split(':', 1)[1].strip().upper()
+                                goal_achieved = 'YES' in value
+                            elif line.startswith('CONTINUE:'):
+                                value = line.split(':', 1)[1].strip().upper()
+                                should_continue = 'YES' in value
+                            elif line.startswith('NEXT_FOCUS:'):
+                                focus_next = line.split(':', 1)[1].strip()
+                                if focus_next.upper() == 'N/A':
+                                    focus_next = None
+
+                        # Check if goal is achieved
+                        if goal_achieved:
+                            self.log("Gemini confirmed goal achieved")
+                            self.telegram.send("✅ *Goal Achieved!*\n\nGemini confirmed the task is complete.")
+                            return "completed"
+
+                        # Check if we should stop
+                        if not should_continue:
+                            self.log("Gemini says to stop")
+                            self.telegram.send("✅ *Gemini says stop*\n\nNo more work needed.")
+                            return "completed"
+
+                        # Store feedback for next iteration if we should continue
+                        if should_continue and focus_next:
+                            self.gemini_feedback = focus_next
+                            self.log(f"Stored Gemini feedback for next iteration: {focus_next[:100]}...")
+                    else:
+                        print("\n\033[91m⚠️ Gemini failed to provide feedback\033[0m")
+                        self.telegram.send("⚠️ *Gemini failed to provide feedback*")
+
+                # Check if Claude indicated the goal/task is complete (always check, regardless of commits)
+                # Strip markdown formatting for more reliable detection
+                summary_clean = summary.replace('*', '').replace('_', '')
+                if "goal achieved" in summary_clean.lower() or "north star achieved" in summary_clean.lower():
+                    self.log("Goal completed - no more work needed")
+                    self.telegram.send("✅ *Auto-Review Complete*\n\nGoal achieved, no more work needed.")
+                    print("\n\033[92m✓ Goal achieved! Loop will exit.\033[0m")
+                    return "completed"  # Special return to signal loop exit
+
+                # Fallback to original logic if no AI or for backwards compatibility
                 if log_output.strip():
                     self.log(f"Recent commits:\n{log_output}")
                     self.telegram.send("✅ *Auto-Review Complete*\n\nCommits made on current branch.")
                 else:
                     self.log("No changes made")
-                    # Check if Claude indicated the goal/task is complete
-                    if "Goal achieved!" in summary or "North Star achieved!" in summary:
-                        self.log("Goal completed - no more work needed")
-                        self.telegram.send("✅ *Auto-Review Complete*\n\nGoal achieved, no more work needed.")
-                        return "completed"  # Special return to signal loop exit
-
                     self.telegram.send("✅ *Auto-Review Complete*\n\nNo changes needed.")
 
                 self.log("Review cycle complete")
@@ -1848,8 +1951,19 @@ Provide a clear, direct answer that Claude can use. Be concise but thorough."""
 # SCHEDULING
 # ============================================================================
 
-def run_loop(reviewer: AutoReviewer):
-    print("Running continuously. Press Ctrl+C to stop.")
+def run_loop(reviewer: AutoReviewer, until_finish: bool = False):
+    """Run the reviewer in a loop.
+
+    Args:
+        reviewer: AutoReviewer instance
+        until_finish: If True, respect completion signals from Gemini/Claude.
+                     If False, run indefinitely regardless of completion.
+    """
+    if until_finish:
+        print("Running until task is complete (Gemini/Claude will determine). Press Ctrl+C to stop.")
+    else:
+        print("Running continuously (ignoring completion). Press Ctrl+C to stop.")
+
     run_count = 0
     while True:
         run_count += 1
@@ -1861,8 +1975,8 @@ def run_loop(reviewer: AutoReviewer):
         result = reviewer.run_once()
         duration = time.time() - start_time
 
-        # Check if reviewer indicated completion
-        if result == "completed":
+        # Check if reviewer indicated completion (only if until_finish is True)
+        if until_finish and result == "completed":
             print("\n✓ Goal achieved! Exiting loop.")
             break
 
@@ -1920,7 +2034,8 @@ def main():
         epilog=get_mode_list()
     )
     parser.add_argument("--once", action="store_true", help="Run once and exit")
-    parser.add_argument("--loop", action="store_true", help="Run continuously (start next immediately)")
+    parser.add_argument("--loop", action="store_true", help="Run continuously (start next immediately, ignore completion)")
+    parser.add_argument("--loop-until-finish", action="store_true", help="Loop until Gemini/Claude determines task is complete")
     parser.add_argument("--interval", type=int, help="Run every N seconds")
     parser.add_argument("--cron", type=str, help="Cron expression")
     parser.add_argument("--mode", "-m", type=str, action="append", dest="modes", help="Improvement mode")
@@ -2230,13 +2345,15 @@ def main():
     if args.once:
         sys.exit(0 if reviewer.run_once() else 1)
     elif args.loop:
-        run_loop(reviewer)
+        run_loop(reviewer, until_finish=False)
+    elif args.loop_until_finish:
+        run_loop(reviewer, until_finish=True)
     elif args.interval:
         run_with_interval(reviewer, args.interval)
     elif args.cron:
         run_with_cron(reviewer, args.cron)
     else:
-        print("Error: Specify --once, --loop, --interval, or --cron")
+        print("Error: Specify --once, --loop, --loop-until-finish, --interval, or --cron")
         parser.print_help()
         sys.exit(1)
 
