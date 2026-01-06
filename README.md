@@ -298,8 +298,13 @@ echo "GEMINI_API_KEY=..." >> .env
 **Usage:**
 
 ```bash
-# Run with AI auto-answer enabled
+# Run with AI auto-answer enabled (auto-selects model)
 cook --loop -m fix_bugs --auto-gemini-answer -y
+
+# Use specific AI model
+cook --loop --auto-gemini-answer --ai-model gpt-5    # Force GPT-5.2
+cook --loop --auto-gemini-answer --ai-model gemini   # Force Gemini 3 Pro
+cook --loop --auto-gemini-answer --ai-model auto     # Auto (default)
 
 # YOLO mode (includes auto-answer)
 cook --yolo -m improve_code
@@ -365,6 +370,7 @@ Sessions are continued automatically - subsequent runs reuse cached context and 
 | `-y, --yes` | Skip confirmation prompt |
 | `--think LEVEL` | Thinking budget: `normal`, `think`, `megathink`, `ultrathink` |
 | `--auto-gemini-answer` | Auto-answer Claude's questions with AI (GPT-5.2 or Gemini 3 Pro) |
+| `--ai-model MODEL` | AI model to use: `auto` (default), `gpt-5`, `gemini` |
 | `--claude "FLAGS"` | Additional flags to pass to Claude CLI |
 | `--resume` | Resume from a previous session |
 | `--clear-sessions` | Clear all saved sessions |

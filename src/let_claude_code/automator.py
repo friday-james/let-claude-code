@@ -1019,7 +1019,8 @@ class AutoReviewer:
         self.work_branch = work_branch  # If set, checkout to this branch before working
         self.claude_flags = claude_flags  # Additional flags to pass to Claude CLI
         self.sessions_file = self.project_dir / ".cook_sessions.json"
-        self.use_gemini = False  # Enable auto-answering Claude questions via Gemini
+        self.use_gemini = False  # Enable auto-answering Claude questions via AI
+        self.ai_model = "auto"  # Which AI model to use: auto, gpt-5, gemini
         self.auto_yes = auto_yes  # Skip confirmation prompts
 
     def get_mode_names(self) -> str:
@@ -1145,7 +1146,21 @@ class AutoReviewer:
 
     def ask_ai(self, question: str, context: str = "") -> str | None:
         """Send a question to AI (Gemini or GPT-5) and get an answer."""
-        # Try GPT-5 first if API key is available
+        # If user specified a specific model, use that
+        if self.ai_model == "gpt-5":
+            if os.environ.get("OPENAI_API_KEY"):
+                return self.ask_gpt5(question, context)
+            else:
+                self.log("GPT-5 requested but no OPENAI_API_KEY found")
+                return None
+        elif self.ai_model == "gemini":
+            if os.environ.get("GEMINI_API_KEY"):
+                return self.ask_gemini(question, context)
+            else:
+                self.log("Gemini requested but no GEMINI_API_KEY found")
+                return None
+
+        # Auto mode: Try GPT-5 first if API key is available
         if os.environ.get("OPENAI_API_KEY"):
             answer = self.ask_gpt5(question, context)
             if answer:
@@ -1921,6 +1936,8 @@ def main():
                         help="Clear all saved sessions and exit")
     parser.add_argument("--auto-gemini-answer", action="store_true",
                         help="Auto-answer Claude's questions using AI (GPT-5.2 or Gemini 3 Pro). Requires OPENAI_API_KEY or GEMINI_API_KEY env var")
+    parser.add_argument("--ai-model", type=str, choices=["auto", "gpt-5", "gemini"],
+                        default="auto", help="AI model to use for auto-answering (default: auto - tries GPT-5 first, then Gemini)")
 
     args = parser.parse_args()
 
@@ -2058,10 +2075,22 @@ def main():
 
         if openai_key or gemini_key:
             use_gemini = True
-            if openai_key:
-                print("✓ OpenAI API key found (GPT-5.2 will be used)")
-            if gemini_key:
-                print("✓ Gemini API key found (Gemini 3 Pro will be used as fallback)")
+            model_mode = args.ai_model
+            if model_mode == "auto":
+                if openai_key:
+                    print("✓ OpenAI API key found (GPT-5.2 will be used)")
+                if gemini_key:
+                    print("✓ Gemini API key found (Gemini 3 Pro will be used as fallback)")
+            elif model_mode == "gpt-5":
+                if openai_key:
+                    print("✓ AI model: GPT-5.2 (OpenAI)")
+                else:
+                    print("⚠️  GPT-5 selected but OPENAI_API_KEY not found")
+            elif model_mode == "gemini":
+                if gemini_key:
+                    print("✓ AI model: Gemini 3 Pro")
+                else:
+                    print("⚠️  Gemini selected but GEMINI_API_KEY not found")
         else:
             print("\n" + "=" * 60)
             print("🤖 AI Auto-Answer requested")
@@ -2172,9 +2201,10 @@ def main():
         auto_yes=args.yes,
     )
 
-    # Enable Gemini auto-answer if requested
+    # Enable AI auto-answer if requested
     if use_gemini:
         reviewer.use_gemini = True
+        reviewer.ai_model = args.ai_model
 
     # If resuming a session, set the session_id
     if resume_session_id:
